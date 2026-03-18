@@ -65,10 +65,12 @@ h1 {
 
 #nextgen-canvas {
   display: block;
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   height: auto;
   border: 1px solid #222222;
   background: #ffffff;
+  image-rendering: pixelated;
 }
 
 #nextgen-report {
@@ -149,6 +151,35 @@ h1 {
 }
 
 .access-corridor-tile-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid #999999;
+  background: #ffffff;
+  image-rendering: pixelated;
+}
+
+#room-prefabs {
+  margin-top: 14px;
+}
+
+#room-prefabs-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+#room-prefabs-meta {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+#room-prefab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.room-prefab-canvas {
   display: block;
   width: 100%;
   height: auto;

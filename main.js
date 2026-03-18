@@ -3,11 +3,14 @@ import { CHUNK_SIZE, CENTER_LANES } from "./engine/procgen.js";
 const WORLD_SEED = "undead-hotel-dev-seed";
 const GENERATOR_VERSION = "v1";
 const NEXTGEN_SEED = `${WORLD_SEED}|corridor-tiles|${GENERATOR_VERSION}`;
-const RADIUS = 1; // 3x3 around origin
+const NEXTGEN_CHUNKS_X = 6;
+const NEXTGEN_CHUNKS_Y = 6;
+const NEXTGEN_ORIGIN_X = -3;
+const NEXTGEN_ORIGIN_Y = -3;
+const NEXTGEN_VIEW_SCALE = 1.4;
 
-const TILE_PIXELS = 6;
-const CHUNK_GAP = 8;
-const VIEW_CHUNKS = RADIUS * 2 + 1;
+const TILE_PIXELS = 3;
+const CHUNK_GAP = 4;
 const CHUNK_PIXELS = CHUNK_SIZE * TILE_PIXELS;
 
 const nextgenCanvas = document.getElementById("nextgen-canvas");
@@ -18,6 +21,8 @@ const corridorTileGrid = document.getElementById("corridor-tile-grid");
 const corridorTilesMeta = document.getElementById("corridor-tiles-meta");
 const accessCorridorTileGrid = document.getElementById("access-corridor-tile-grid");
 const accessCorridorTilesMeta = document.getElementById("access-corridor-tiles-meta");
+const roomPrefabGrid = document.getElementById("room-prefab-grid");
+const roomPrefabsMeta = document.getElementById("room-prefabs-meta");
 const openWorldPreviewButton = document.getElementById("open-world-preview");
 const closeWorldPreviewButton = document.getElementById("close-world-preview");
 const appMain = document.querySelector("main");
@@ -28,6 +33,7 @@ const worldPreviewMeta = document.getElementById("world-preview-meta");
 
 const CORRIDOR_TILE_PIXEL = 3;
 const ACCESS_CORRIDOR_TILE_PIXEL = 4;
+const ROOM_PREFAB_TILE_PIXEL = 8;
 const CORRIDOR_SIDES = ["N", "E", "S", "W"];
 const NEXTGEN_MAX_CONNECT_PASSES = 24;
 const NEXTGEN_MAX_REROLLS_PER_CHUNK = 64;
@@ -41,7 +47,11 @@ const TILE_ACCESS_RESERVED = 9;
 const TILE_ROOM_FLOOR = 10;
 const TILE_ROOM_WALL = 11;
 const TILE_ROOM_DOOR = 12;
-const MIN_ROOM_SIZE = 5;
+const ROOM_PREFAB_CELL_FLOOR = 1;
+const ROOM_PREFAB_CELL_WALL = 2;
+const ROOM_THIN_WALL_RATIO = 0.2;
+const ROOM_GROWTH_MIN_REAR_CLEARANCE = 2;
+const MIN_ROOM_SIZE = 4;
 const TARGET_ROOM_SIZE = 8;
 const SPECIAL_SPACE_CHANCE_PERMILLE = 30; // 30%
 const SPECIAL_SPACE_DEFS = [
@@ -80,9 +90,17 @@ const DISABLED_ACCESS_TILE_KEYS = new Set([
   "Set 2|5",
   "Set 2|4",
 ]);
+const ROOM_PREFAB_CATALOG = [
+  buildRoomPrefabDefinition("R01", 4, 5),
+  buildRoomPrefabDefinition("R02", 6, 5),
+  buildRoomPrefabDefinition("R03", 8, 5),
+  buildRoomPrefabDefinition("R04", 10, 5),
+];
+const ROOM_PREFAB_VARIANTS = buildRoomPrefabVariants(ROOM_PREFAB_CATALOG);
 
-nextgenCanvas.width = VIEW_CHUNKS * CHUNK_PIXELS + (VIEW_CHUNKS - 1) * CHUNK_GAP;
-nextgenCanvas.height = nextgenCanvas.width;
+nextgenCanvas.width = NEXTGEN_CHUNKS_X * CHUNK_PIXELS + (NEXTGEN_CHUNKS_X - 1) * CHUNK_GAP;
+nextgenCanvas.height = NEXTGEN_CHUNKS_Y * CHUNK_PIXELS + (NEXTGEN_CHUNKS_Y - 1) * CHUNK_GAP;
+nextgenCanvas.style.width = `${Math.round(nextgenCanvas.width * NEXTGEN_VIEW_SCALE)}px`;
 
 function coordKey(x, y) {
   return `${x},${y}`;
@@ -106,6 +124,71 @@ function seededIndex(mod, ...parts) {
     return 0;
   }
   return hashParts(...parts) % mod;
+}
+
+function buildRoomPrefabTileMap(w, h) {
+  const tileMap = new Uint8Array(w * h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const isWall = x === 0 || y === 0 || x === w - 1 || y === h - 1;
+      tileMap[y * w + x] = isWall ? ROOM_PREFAB_CELL_WALL : ROOM_PREFAB_CELL_FLOOR;
+    }
+  }
+  return tileMap;
+}
+
+function buildRoomPrefabDefinition(id, w, h) {
+  return {
+    id,
+    w,
+    h,
+    area: w * h,
+    tileMap: buildRoomPrefabTileMap(w, h),
+  };
+}
+
+function rotateRoomPrefabTileMapClockwise(tileMap, w, h) {
+  const rotatedW = h;
+  const rotatedH = w;
+  const rotated = new Uint8Array(rotatedW * rotatedH);
+
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const nx = h - 1 - y;
+      const ny = x;
+      rotated[ny * rotatedW + nx] = tileMap[y * w + x];
+    }
+  }
+
+  return { tileMap: rotated, w: rotatedW, h: rotatedH };
+}
+
+function buildRoomPrefabVariants(prefabs) {
+  const variants = [];
+  for (const prefab of prefabs) {
+    variants.push({
+      id: prefab.id,
+      baseId: prefab.id,
+      w: prefab.w,
+      h: prefab.h,
+      area: prefab.area,
+      rotationTurns: 0,
+      tileMap: prefab.tileMap,
+    });
+    if (prefab.w !== prefab.h) {
+      const rotated = rotateRoomPrefabTileMapClockwise(prefab.tileMap, prefab.w, prefab.h);
+      variants.push({
+        id: `${prefab.id}_R90`,
+        baseId: prefab.id,
+        w: rotated.w,
+        h: rotated.h,
+        area: prefab.area,
+        rotationTurns: 1,
+        tileMap: rotated.tileMap,
+      });
+    }
+  }
+  return variants;
 }
 
 function buildCorridorTilePatterns() {
@@ -423,20 +506,107 @@ function chunkBoundsFromRadius(radius) {
   };
 }
 
+function nextgenBounds() {
+  return {
+    minX: NEXTGEN_ORIGIN_X,
+    maxX: NEXTGEN_ORIGIN_X + NEXTGEN_CHUNKS_X - 1,
+    minY: NEXTGEN_ORIGIN_Y,
+    maxY: NEXTGEN_ORIGIN_Y + NEXTGEN_CHUNKS_Y - 1,
+  };
+}
+
+function drawThinExteriorWallsForRooms(
+  ctx,
+  originX,
+  originY,
+  rooms,
+  tileMap,
+  mapWidth,
+  tilePixel,
+  wallTile,
+  doorTile = -1,
+  thicknessRatio = ROOM_THIN_WALL_RATIO
+) {
+  const thickness = Math.max(1, Math.round(tilePixel * thicknessRatio));
+  ctx.fillStyle = "#8f8f8f";
+  for (const room of rooms) {
+    const xMin = room.x;
+    const xMax = room.x + room.w - 1;
+    const yMin = room.y;
+    const yMax = room.y + room.h - 1;
+
+    for (let x = xMin; x <= xMax; x += 1) {
+      const topIdx = yMin * mapWidth + x;
+      if (tileMap[topIdx] === wallTile && tileMap[topIdx] !== doorTile) {
+        ctx.fillRect(
+          originX + x * tilePixel,
+          originY + yMin * tilePixel,
+          tilePixel,
+          thickness
+        );
+      }
+
+      const bottomIdx = yMax * mapWidth + x;
+      if (tileMap[bottomIdx] === wallTile && tileMap[bottomIdx] !== doorTile) {
+        ctx.fillRect(
+          originX + x * tilePixel,
+          originY + (yMax + 1) * tilePixel - thickness,
+          tilePixel,
+          thickness
+        );
+      }
+    }
+
+    for (let y = yMin; y <= yMax; y += 1) {
+      const leftIdx = y * mapWidth + xMin;
+      if (tileMap[leftIdx] === wallTile && tileMap[leftIdx] !== doorTile) {
+        ctx.fillRect(
+          originX + xMin * tilePixel,
+          originY + y * tilePixel,
+          thickness,
+          tilePixel
+        );
+      }
+
+      const rightIdx = y * mapWidth + xMax;
+      if (tileMap[rightIdx] === wallTile && tileMap[rightIdx] !== doorTile) {
+        ctx.fillRect(
+          originX + (xMax + 1) * tilePixel - thickness,
+          originY + y * tilePixel,
+          thickness,
+          tilePixel
+        );
+      }
+    }
+  }
+}
+
 function drawCorridorChunk(nextCtx, originX, originY, chunkInput, tilePixel = TILE_PIXELS, drawBorder = true) {
-  const tileMap = chunkInput instanceof Uint8Array ? chunkInput : carveCorridorTileGrid(chunkInput);
+  let tileMap;
+  let roomList = [];
+  if (chunkInput instanceof Uint8Array) {
+    tileMap = chunkInput;
+  } else if (chunkInput && chunkInput.tileMap instanceof Uint8Array) {
+    tileMap = chunkInput.tileMap;
+    if (Array.isArray(chunkInput.rooms)) {
+      roomList = chunkInput.rooms;
+    }
+  } else {
+    tileMap = carveCorridorTileGrid(chunkInput);
+  }
+
   for (let y = 0; y < CHUNK_SIZE; y += 1) {
     for (let x = 0; x < CHUNK_SIZE; x += 1) {
       const tile = tileMap[y * CHUNK_SIZE + x];
-      let color = "#ffffff";
+      let color = "#8f8f8f";
       if (tile === 1) {
         color = "#1f1f1f";
       } else if (tile === TILE_ACCESS_RESERVED) {
-        color = "#f0f0f0";
+        color = "#8f8f8f";
       } else if (tile === TILE_ROOM_FLOOR) {
         color = "#efefef";
       } else if (tile === TILE_ROOM_WALL) {
-        color = "#8f8f8f";
+        color = "#efefef";
       } else if (tile === TILE_ROOM_DOOR) {
         color = "#ff9100";
       } else if (tile >= 2 && tile < 2 + SPECIAL_SPACE_DEFS.length) {
@@ -451,6 +621,20 @@ function drawCorridorChunk(nextCtx, originX, originY, chunkInput, tilePixel = TI
         tilePixel
       );
     }
+  }
+
+  if (roomList.length > 0) {
+    drawThinExteriorWallsForRooms(
+      nextCtx,
+      originX,
+      originY,
+      roomList,
+      tileMap,
+      CHUNK_SIZE,
+      tilePixel,
+      TILE_ROOM_WALL,
+      TILE_ROOM_DOOR
+    );
   }
 
   if (drawBorder) {
@@ -577,6 +761,355 @@ function deriveRoomFillSpaces(tileMap) {
   return spaces;
 }
 
+function pickBetterRoomTilingCandidate(best, candidate) {
+  if (candidate.coveredArea !== best.coveredArea) {
+    return candidate.coveredArea > best.coveredArea ? candidate : best;
+  }
+  if (candidate.roomCount !== best.roomCount) {
+    return candidate.roomCount < best.roomCount ? candidate : best;
+  }
+  return candidate.tieBreaker < best.tieBreaker ? candidate : best;
+}
+
+function tileZoneWithRoomPrefabs(zone, cx, cy, zoneIndex) {
+  const memo = new Map();
+
+  function solve(width, height) {
+    const key = `${width}x${height}`;
+    if (memo.has(key)) {
+      return memo.get(key);
+    }
+
+    let best = {
+      kind: "none",
+      coveredArea: 0,
+      roomCount: 0,
+      tieBreaker: Number.MAX_SAFE_INTEGER,
+    };
+
+    for (const variant of ROOM_PREFAB_VARIANTS) {
+      if (variant.w !== width || variant.h !== height) {
+        continue;
+      }
+
+      const candidate = {
+        kind: "prefab",
+        coveredArea: variant.area,
+        roomCount: 1,
+        tieBreaker: hashParts(
+          NEXTGEN_SEED,
+          cx,
+          cy,
+          "prefab-fit",
+          zoneIndex,
+          width,
+          height,
+          variant.id
+        ),
+        variant,
+      };
+      best = pickBetterRoomTilingCandidate(best, candidate);
+    }
+
+    for (let split = 1; split < width; split += 1) {
+      const left = solve(split, height);
+      const right = solve(width - split, height);
+      const candidate = {
+        kind: "splitV",
+        coveredArea: left.coveredArea + right.coveredArea,
+        roomCount: left.roomCount + right.roomCount,
+        tieBreaker: hashParts(
+          NEXTGEN_SEED,
+          cx,
+          cy,
+          "prefab-split-v",
+          zoneIndex,
+          width,
+          height,
+          split,
+          left.tieBreaker,
+          right.tieBreaker
+        ),
+        split,
+        left,
+        right,
+      };
+      best = pickBetterRoomTilingCandidate(best, candidate);
+    }
+
+    for (let split = 1; split < height; split += 1) {
+      const top = solve(width, split);
+      const bottom = solve(width, height - split);
+      const candidate = {
+        kind: "splitH",
+        coveredArea: top.coveredArea + bottom.coveredArea,
+        roomCount: top.roomCount + bottom.roomCount,
+        tieBreaker: hashParts(
+          NEXTGEN_SEED,
+          cx,
+          cy,
+          "prefab-split-h",
+          zoneIndex,
+          width,
+          height,
+          split,
+          top.tieBreaker,
+          bottom.tieBreaker
+        ),
+        split,
+        top,
+        bottom,
+      };
+      best = pickBetterRoomTilingCandidate(best, candidate);
+    }
+
+    memo.set(key, best);
+    return best;
+  }
+
+  function emitRooms(node, localX, localY, output) {
+    if (!node || node.coveredArea <= 0) {
+      return;
+    }
+    if (node.kind === "prefab") {
+      output.push({
+        x: zone.x + localX,
+        y: zone.y + localY,
+        w: node.variant.w,
+        h: node.variant.h,
+        prefabId: node.variant.baseId,
+        rotationTurns: node.variant.rotationTurns,
+        prefabTileMap: node.variant.tileMap,
+      });
+      return;
+    }
+    if (node.kind === "splitV") {
+      emitRooms(node.left, localX, localY, output);
+      emitRooms(node.right, localX + node.split, localY, output);
+      return;
+    }
+    if (node.kind === "splitH") {
+      emitRooms(node.top, localX, localY, output);
+      emitRooms(node.bottom, localX, localY + node.split, output);
+    }
+  }
+
+  const solved = solve(zone.w, zone.h);
+  const rooms = [];
+  emitRooms(solved, 0, 0, rooms);
+  return {
+    rooms,
+    coveredArea: solved.coveredArea,
+    uncoveredArea: zone.area - solved.coveredArea,
+  };
+}
+
+function roomOverlapsOccupied(room, occupied, zone) {
+  for (let dy = 0; dy < room.h; dy += 1) {
+    for (let dx = 0; dx < room.w; dx += 1) {
+      const localX = room.x - zone.x + dx;
+      const localY = room.y - zone.y + dy;
+      if (occupied[localY * zone.w + localX] === 1) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function markRoomOccupied(room, occupied, zone) {
+  for (let dy = 0; dy < room.h; dy += 1) {
+    for (let dx = 0; dx < room.w; dx += 1) {
+      const localX = room.x - zone.x + dx;
+      const localY = room.y - zone.y + dy;
+      occupied[localY * zone.w + localX] = 1;
+    }
+  }
+}
+
+function collectCorridorAccessibleRoomCandidates(zone, baseTileMap, cx, cy, zoneIndex) {
+  const candidates = [];
+
+  for (const variant of ROOM_PREFAB_VARIANTS) {
+    const xMax = zone.x + zone.w - variant.w;
+    const yMax = zone.y + zone.h - variant.h;
+    if (xMax < zone.x || yMax < zone.y) {
+      continue;
+    }
+
+    for (let y = zone.y; y <= yMax; y += 1) {
+      for (let x = zone.x; x <= xMax; x += 1) {
+        const room = {
+          x,
+          y,
+          w: variant.w,
+          h: variant.h,
+          prefabId: variant.baseId,
+          rotationTurns: variant.rotationTurns,
+          prefabTileMap: variant.tileMap,
+        };
+        const doorBySide = collectCorridorDoorCandidatesBySide(baseTileMap, room);
+        const doorCandidates = [...doorBySide.N, ...doorBySide.E, ...doorBySide.S, ...doorBySide.W];
+        if (doorCandidates.length === 0) {
+          continue;
+        }
+        const shortDoorCandidates = [];
+        for (const side of shortSideDirections(room)) {
+          shortDoorCandidates.push(...doorBySide[side]);
+        }
+
+        candidates.push({
+          ...room,
+          doorCandidates,
+          shortSideDoorCandidates: shortDoorCandidates,
+          candidateOrder: candidates.length,
+          tie: hashParts(
+            NEXTGEN_SEED,
+            cx,
+            cy,
+            "room-candidate",
+            zoneIndex,
+            variant.id,
+            x,
+            y
+          ),
+        });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function scoreRoomSelection(roomList) {
+  let area = 0;
+  for (const room of roomList) {
+    area += room.w * room.h;
+  }
+  return { area, count: roomList.length };
+}
+
+function chooseBetterRoomSelection(currentBest, candidate) {
+  if (!currentBest) {
+    return candidate;
+  }
+  if (candidate.score.area !== currentBest.score.area) {
+    return candidate.score.area > currentBest.score.area ? candidate : currentBest;
+  }
+  if (candidate.score.count !== currentBest.score.count) {
+    return candidate.score.count < currentBest.score.count ? candidate : currentBest;
+  }
+  return candidate.orderTag < currentBest.orderTag ? candidate : currentBest;
+}
+
+function placeCorridorAccessibleRoomsInZone(zone, baseTileMap, cx, cy, zoneIndex) {
+  const candidates = collectCorridorAccessibleRoomCandidates(zone, baseTileMap, cx, cy, zoneIndex);
+  if (candidates.length === 0) {
+    return { rooms: [], uncoveredArea: zone.area };
+  }
+  const preferredCandidates = candidates.filter((candidate) => candidate.shortSideDoorCandidates.length > 0);
+  const candidatePool = preferredCandidates.length > 0 ? preferredCandidates : candidates;
+
+  const orderings = [
+    {
+      tag: 0,
+      compare: (a, b) =>
+        b.shortSideDoorCandidates.length - a.shortSideDoorCandidates.length ||
+        b.w * b.h - a.w * a.h ||
+        b.doorCandidates.length - a.doorCandidates.length ||
+        a.tie - b.tie,
+    },
+    {
+      tag: 1,
+      compare: (a, b) =>
+        b.shortSideDoorCandidates.length - a.shortSideDoorCandidates.length ||
+        b.doorCandidates.length - a.doorCandidates.length ||
+        b.w * b.h - a.w * a.h ||
+        a.tie - b.tie,
+    },
+    {
+      tag: 2,
+      compare: (a, b) =>
+        b.shortSideDoorCandidates.length - a.shortSideDoorCandidates.length ||
+        a.y - b.y ||
+        a.x - b.x ||
+        b.w * b.h - a.w * a.h ||
+        a.tie - b.tie,
+    },
+    {
+      tag: 3,
+      compare: (a, b) =>
+        b.shortSideDoorCandidates.length - a.shortSideDoorCandidates.length ||
+        a.w * a.h - b.w * b.h ||
+        a.tie - b.tie,
+    },
+  ];
+
+  let best = null;
+  for (const ordering of orderings) {
+    const occupied = new Uint8Array(zone.w * zone.h);
+    const selected = [];
+    const ordered = [...candidatePool].sort(ordering.compare);
+
+    for (const candidate of ordered) {
+      if (roomOverlapsOccupied(candidate, occupied, zone)) {
+        continue;
+      }
+      selected.push(candidate);
+      markRoomOccupied(candidate, occupied, zone);
+    }
+
+    best = chooseBetterRoomSelection(best, {
+      rooms: selected,
+      score: scoreRoomSelection(selected),
+      orderTag: ordering.tag,
+    });
+  }
+
+  const chosenRooms = best ? best.rooms : [];
+  const coveredArea = chosenRooms.reduce((sum, room) => sum + room.w * room.h, 0);
+  return {
+    rooms: chosenRooms,
+    uncoveredArea: zone.area - coveredArea,
+  };
+}
+
+function buildRemainingRoomFillMap(baseTileMap, rooms) {
+  const fillMap = baseTileMap.slice();
+  for (const room of rooms) {
+    for (let y = room.y; y < room.y + room.h; y += 1) {
+      for (let x = room.x; x < room.x + room.w; x += 1) {
+        const idx = y * CHUNK_SIZE + x;
+        if (isRoomFillableTile(fillMap[idx])) {
+          fillMap[idx] = TILE_ROOM_FLOOR;
+        }
+      }
+    }
+  }
+  return fillMap;
+}
+
+function runAdditionalRoomPlacementPass(rooms, baseTileMap, cx, cy) {
+  const fillMap = buildRemainingRoomFillMap(baseTileMap, rooms);
+  const leftoverZones = deriveRoomFillSpaces(fillMap);
+  const extraRooms = [];
+  const zoneIndexOffset = 10000;
+
+  for (let zoneIndex = 0; zoneIndex < leftoverZones.length; zoneIndex += 1) {
+    const zone = leftoverZones[zoneIndex];
+    const placed = placeCorridorAccessibleRoomsInZone(
+      zone,
+      baseTileMap,
+      cx,
+      cy,
+      zoneIndexOffset + zoneIndex
+    );
+    extraRooms.push(...placed.rooms);
+  }
+
+  return extraRooms;
+}
+
 function partitionSpanIntoRooms(span) {
   if (span <= 0) {
     return [];
@@ -627,17 +1160,22 @@ function roomArea(room) {
   return room.w * room.h;
 }
 
-function collectCorridorDoorCandidates(tileMap, room) {
-  const candidates = [];
+function collectCorridorDoorCandidatesBySide(tileMap, room) {
+  const bySide = {
+    N: [],
+    S: [],
+    E: [],
+    W: [],
+  };
 
   for (let x = room.x + 1; x < room.x + room.w - 1; x += 1) {
     const yTop = room.y;
     const yBottom = room.y + room.h - 1;
     if (isCorridorTile(tileMap, x, yTop - 1)) {
-      candidates.push({ x, y: yTop });
+      bySide.N.push({ x, y: yTop });
     }
     if (isCorridorTile(tileMap, x, yBottom + 1)) {
-      candidates.push({ x, y: yBottom });
+      bySide.S.push({ x, y: yBottom });
     }
   }
 
@@ -645,14 +1183,253 @@ function collectCorridorDoorCandidates(tileMap, room) {
     const xLeft = room.x;
     const xRight = room.x + room.w - 1;
     if (isCorridorTile(tileMap, xLeft - 1, y)) {
-      candidates.push({ x: xLeft, y });
+      bySide.W.push({ x: xLeft, y });
     }
     if (isCorridorTile(tileMap, xRight + 1, y)) {
-      candidates.push({ x: xRight, y });
+      bySide.E.push({ x: xRight, y });
     }
   }
 
-  return candidates;
+  return bySide;
+}
+
+function collectCorridorDoorCandidates(tileMap, room) {
+  const bySide = collectCorridorDoorCandidatesBySide(tileMap, room);
+  return [...bySide.N, ...bySide.E, ...bySide.S, ...bySide.W];
+}
+
+function shortSideDirections(room) {
+  if (room.w < room.h) {
+    return ["N", "S"];
+  }
+  if (room.h < room.w) {
+    return ["E", "W"];
+  }
+  return ["N", "E", "S", "W"];
+}
+
+function oppositeSide(side) {
+  if (side === "N") {
+    return "S";
+  }
+  if (side === "S") {
+    return "N";
+  }
+  if (side === "E") {
+    return "W";
+  }
+  return "E";
+}
+
+function findRoomPrefabVariant(baseId, rotationTurns) {
+  return ROOM_PREFAB_VARIANTS.find(
+    (variant) => variant.baseId === baseId && variant.rotationTurns === rotationTurns
+  );
+}
+
+function findNextRoomPrefabVariant(room) {
+  const index = ROOM_PREFAB_CATALOG.findIndex((prefab) => prefab.id === room.prefabId);
+  if (index < 0 || index >= ROOM_PREFAB_CATALOG.length - 1) {
+    return null;
+  }
+  const nextId = ROOM_PREFAB_CATALOG[index + 1].id;
+  return findRoomPrefabVariant(nextId, room.rotationTurns);
+}
+
+function markRoomOnChunkOccupancy(occupancy, room, value) {
+  for (let y = room.y; y < room.y + room.h; y += 1) {
+    for (let x = room.x; x < room.x + room.w; x += 1) {
+      occupancy[y * CHUNK_SIZE + x] = value;
+    }
+  }
+}
+
+function pickDoorSideForRoomGrowth(room, doorBySide, compatibleDoorSides, cx, cy, roomIndex) {
+  const allSides = ["N", "E", "S", "W"];
+  const shortSides = shortSideDirections(room);
+  const compatible = compatibleDoorSides && compatibleDoorSides.length > 0 ? compatibleDoorSides : allSides;
+
+  const groups = [
+    shortSides.filter((side) => compatible.includes(side)),
+    compatible.filter((side) => !shortSides.includes(side)),
+    shortSides.filter((side) => !compatible.includes(side)),
+    allSides.filter((side) => !shortSides.includes(side) && !compatible.includes(side)),
+  ];
+
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+    const available = groups[groupIndex].filter((side) => doorBySide[side].length > 0);
+    if (available.length === 0) {
+      continue;
+    }
+    const pick = seededIndex(
+      available.length,
+      NEXTGEN_SEED,
+      cx,
+      cy,
+      "room-door-side",
+      roomIndex,
+      groupIndex,
+      room.x,
+      room.y,
+      room.w,
+      room.h
+    );
+    return available[pick];
+  }
+
+  return null;
+}
+
+function isGrowthLayerClear(room, growthSide, depth, baseTileMap, occupancy) {
+  if (growthSide === "E") {
+    const x = room.x + room.w + depth - 1;
+    if (x < 0 || x >= CHUNK_SIZE) {
+      return false;
+    }
+    for (let y = room.y; y < room.y + room.h; y += 1) {
+      if (y < 0 || y >= CHUNK_SIZE) {
+        return false;
+      }
+      const idx = y * CHUNK_SIZE + x;
+      if (!isRoomFillableTile(baseTileMap[idx]) || occupancy[idx] !== 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (growthSide === "W") {
+    const x = room.x - depth;
+    if (x < 0 || x >= CHUNK_SIZE) {
+      return false;
+    }
+    for (let y = room.y; y < room.y + room.h; y += 1) {
+      if (y < 0 || y >= CHUNK_SIZE) {
+        return false;
+      }
+      const idx = y * CHUNK_SIZE + x;
+      if (!isRoomFillableTile(baseTileMap[idx]) || occupancy[idx] !== 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (growthSide === "S") {
+    const y = room.y + room.h + depth - 1;
+    if (y < 0 || y >= CHUNK_SIZE) {
+      return false;
+    }
+    for (let x = room.x; x < room.x + room.w; x += 1) {
+      if (x < 0 || x >= CHUNK_SIZE) {
+        return false;
+      }
+      const idx = y * CHUNK_SIZE + x;
+      if (!isRoomFillableTile(baseTileMap[idx]) || occupancy[idx] !== 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const y = room.y - depth;
+  if (y < 0 || y >= CHUNK_SIZE) {
+    return false;
+  }
+  for (let x = room.x; x < room.x + room.w; x += 1) {
+    if (x < 0 || x >= CHUNK_SIZE) {
+      return false;
+    }
+    const idx = y * CHUNK_SIZE + x;
+    if (!isRoomFillableTile(baseTileMap[idx]) || occupancy[idx] !== 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function measureRearClearDepth(room, growthSide, baseTileMap, occupancy) {
+  let depth = 0;
+  const maxDepth = CHUNK_SIZE;
+  for (let d = 1; d <= maxDepth; d += 1) {
+    if (!isGrowthLayerClear(room, growthSide, d, baseTileMap, occupancy)) {
+      break;
+    }
+    depth = d;
+  }
+  return depth;
+}
+
+function applyRoomGrowthPass(rooms, baseTileMap, cx, cy) {
+  const occupancy = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+  for (const room of rooms) {
+    markRoomOnChunkOccupancy(occupancy, room, 1);
+  }
+
+  let grownArea = 0;
+  for (let roomIndex = 0; roomIndex < rooms.length; roomIndex += 1) {
+    const room = rooms[roomIndex];
+    const doorBySide = collectCorridorDoorCandidatesBySide(baseTileMap, room);
+    const nextVariant = findNextRoomPrefabVariant(room);
+    let compatibleDoorSides = ["N", "E", "S", "W"];
+    let deltaW = 0;
+    let deltaH = 0;
+
+    if (nextVariant) {
+      deltaW = nextVariant.w - room.w;
+      deltaH = nextVariant.h - room.h;
+      if (deltaW > 0) {
+        compatibleDoorSides = ["W", "E"];
+      } else if (deltaH > 0) {
+        compatibleDoorSides = ["N", "S"];
+      }
+    }
+
+    const chosenDoorSide = pickDoorSideForRoomGrowth(
+      room,
+      doorBySide,
+      compatibleDoorSides,
+      cx,
+      cy,
+      roomIndex
+    );
+    room.preferredDoorSide = chosenDoorSide || room.preferredDoorSide;
+
+    if (!nextVariant || !chosenDoorSide) {
+      continue;
+    }
+
+    const growthSide = oppositeSide(chosenDoorSide);
+    const neededDepth = deltaW > 0 ? deltaW : deltaH;
+    if (neededDepth <= 0) {
+      continue;
+    }
+    if (
+      (deltaW > 0 && growthSide !== "E" && growthSide !== "W") ||
+      (deltaH > 0 && growthSide !== "N" && growthSide !== "S")
+    ) {
+      continue;
+    }
+
+    markRoomOnChunkOccupancy(occupancy, room, 0);
+    const clearDepth = measureRearClearDepth(room, growthSide, baseTileMap, occupancy);
+    if (clearDepth >= ROOM_GROWTH_MIN_REAR_CLEARANCE && clearDepth >= neededDepth) {
+      const oldArea = roomArea(room);
+      if (growthSide === "W") {
+        room.x -= deltaW;
+      } else if (growthSide === "N") {
+        room.y -= deltaH;
+      }
+      room.w = nextVariant.w;
+      room.h = nextVariant.h;
+      room.prefabId = nextVariant.baseId;
+      room.prefabTileMap = nextVariant.tileMap;
+      grownArea += roomArea(room) - oldArea;
+    }
+    markRoomOnChunkOccupancy(occupancy, room, 1);
+  }
+
+  return { grownArea };
 }
 
 function sharedEdgeLength(a, b) {
@@ -802,36 +1579,47 @@ function resolveRoomsByMerging(initialRooms, corridorMap, cx, cy) {
   }));
 }
 
+function stampRoomPrefabFootprint(tileMap, room) {
+  if (!room.prefabTileMap) {
+    return;
+  }
+
+  for (let dy = 0; dy < room.h; dy += 1) {
+    for (let dx = 0; dx < room.w; dx += 1) {
+      const prefabTile = room.prefabTileMap[dy * room.w + dx];
+      const idx = (room.y + dy) * CHUNK_SIZE + (room.x + dx);
+      if (prefabTile === ROOM_PREFAB_CELL_WALL) {
+        tileMap[idx] = TILE_ROOM_WALL;
+      } else if (prefabTile === ROOM_PREFAB_CELL_FLOOR) {
+        tileMap[idx] = TILE_ROOM_FLOOR;
+      }
+    }
+  }
+}
+
 function generateChunkRooms(baseTileMap, cx, cy) {
   const tileMap = baseTileMap.slice();
   const zones = deriveRoomFillSpaces(tileMap);
-  const initialRooms = [];
+  const rooms = [];
   let doorCount = 0;
   let doorlessRooms = 0;
   let undersizedRooms = 0;
+  let uncoveredPrefabArea = 0;
 
-  for (const zone of zones) {
-    const zoneRooms = buildRoomsForZone(zone);
-    initialRooms.push(...zoneRooms);
+  for (let zoneIndex = 0; zoneIndex < zones.length; zoneIndex += 1) {
+    const zone = zones[zoneIndex];
+    const placed = placeCorridorAccessibleRoomsInZone(zone, baseTileMap, cx, cy, zoneIndex);
+    rooms.push(...placed.rooms);
+    uncoveredPrefabArea += placed.uncoveredArea;
   }
 
-  const rooms = resolveRoomsByMerging(initialRooms, baseTileMap, cx, cy);
+  const extraRooms = runAdditionalRoomPlacementPass(rooms, baseTileMap, cx, cy);
+  rooms.push(...extraRooms);
 
-  for (let i = 0; i < tileMap.length; i += 1) {
-    if (isRoomFillableTile(tileMap[i])) {
-      tileMap[i] = TILE_ROOM_FLOOR;
-    }
-  }
+  applyRoomGrowthPass(rooms, baseTileMap, cx, cy);
 
   for (const room of rooms) {
-    for (let x = room.x; x < room.x + room.w; x += 1) {
-      tileMap[room.y * CHUNK_SIZE + x] = TILE_ROOM_WALL;
-      tileMap[(room.y + room.h - 1) * CHUNK_SIZE + x] = TILE_ROOM_WALL;
-    }
-    for (let y = room.y; y < room.y + room.h; y += 1) {
-      tileMap[y * CHUNK_SIZE + room.x] = TILE_ROOM_WALL;
-      tileMap[y * CHUNK_SIZE + (room.x + room.w - 1)] = TILE_ROOM_WALL;
-    }
+    stampRoomPrefabFootprint(tileMap, room);
   }
 
   for (let roomIndex = 0; roomIndex < rooms.length; roomIndex += 1) {
@@ -839,8 +1627,21 @@ function generateChunkRooms(baseTileMap, cx, cy) {
     if (room.w < MIN_ROOM_SIZE || room.h < MIN_ROOM_SIZE) {
       undersizedRooms += 1;
     }
-    const doorCandidates = collectCorridorDoorCandidates(baseTileMap, room);
-    if (doorCandidates.length === 0) {
+    const doorBySide = collectCorridorDoorCandidatesBySide(baseTileMap, room);
+    const shortSides = shortSideDirections(room);
+    const shortCandidates = [];
+    for (const side of shortSides) {
+      shortCandidates.push(...doorBySide[side]);
+    }
+    let doorCandidates = [];
+    if (room.preferredDoorSide && doorBySide[room.preferredDoorSide].length > 0) {
+      doorCandidates = doorBySide[room.preferredDoorSide];
+    } else if (shortCandidates.length > 0) {
+      doorCandidates = shortCandidates;
+    } else {
+      doorCandidates = [...doorBySide.N, ...doorBySide.E, ...doorBySide.S, ...doorBySide.W];
+    }
+    if (!doorCandidates || doorCandidates.length === 0) {
       doorlessRooms += 1;
       continue;
     }
@@ -862,12 +1663,19 @@ function generateChunkRooms(baseTileMap, cx, cy) {
     doorCount += 1;
   }
 
+  for (let i = 0; i < tileMap.length; i += 1) {
+    if (tileMap[i] === TILE_ACCESS_RESERVED) {
+      tileMap[i] = 0;
+    }
+  }
+
   let unfilledCount = 0;
   for (let i = 0; i < tileMap.length; i += 1) {
     if (isRoomFillableTile(tileMap[i])) {
       unfilledCount += 1;
     }
   }
+  uncoveredPrefabArea = unfilledCount;
 
   return {
     tileMap,
@@ -878,6 +1686,7 @@ function generateChunkRooms(baseTileMap, cx, cy) {
     doorlessRooms,
     undersizedRooms,
     unfilledCount,
+    uncoveredPrefabArea,
   };
 }
 
@@ -1290,7 +2099,7 @@ function buildForcedCorridorAssignment(patterns, cx, cy, requiredSide, forceInde
   };
 }
 
-function buildNextgenAssignments(patterns, bounds = chunkBoundsFromRadius(RADIUS)) {
+function buildNextgenAssignments(patterns, bounds = nextgenBounds()) {
   const assignments = new Map();
   for (let cy = bounds.minY; cy <= bounds.maxY; cy += 1) {
     for (let cx = bounds.minX; cx <= bounds.maxX; cx += 1) {
@@ -1319,7 +2128,7 @@ function hasConnectingNeighbor(assignments, cx, cy) {
   return false;
 }
 
-function inBoundsNeighbors(cx, cy, bounds = chunkBoundsFromRadius(RADIUS)) {
+function inBoundsNeighbors(cx, cy, bounds = nextgenBounds()) {
   const valid = [];
   for (const rule of CARDINAL_NEIGHBORS) {
     const nx = cx + rule.dx;
@@ -1345,7 +2154,7 @@ function rerollUntilConnected(assignments, patterns, cx, cy, rerollCounts) {
   return hasConnectingNeighbor(assignments, cx, cy);
 }
 
-function forcePairConnection(assignments, patterns, cx, cy, rerollCounts, bounds = chunkBoundsFromRadius(RADIUS)) {
+function forcePairConnection(assignments, patterns, cx, cy, rerollCounts, bounds = nextgenBounds()) {
   const neighbors = inBoundsNeighbors(cx, cy, bounds);
   if (neighbors.length === 0) {
     return false;
@@ -1375,7 +2184,7 @@ function forcePairConnection(assignments, patterns, cx, cy, rerollCounts, bounds
   return hasConnectingNeighbor(assignments, cx, cy);
 }
 
-function enforceNextgenConnections(assignments, patterns, bounds = chunkBoundsFromRadius(RADIUS)) {
+function enforceNextgenConnections(assignments, patterns, bounds = nextgenBounds()) {
   const rerollCounts = new Map();
   let passesRun = 0;
 
@@ -1488,26 +2297,95 @@ function renderAccessCorridorCatalog(accessCatalogue) {
   }
 }
 
+function drawRoomPrefabPreview(canvasEl, prefab) {
+  canvasEl.width = prefab.w * ROOM_PREFAB_TILE_PIXEL;
+  canvasEl.height = prefab.h * ROOM_PREFAB_TILE_PIXEL;
+  const previewCtx = canvasEl.getContext("2d");
+  previewCtx.fillStyle = "#ffffff";
+  previewCtx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+
+  for (let y = 0; y < prefab.h; y += 1) {
+    for (let x = 0; x < prefab.w; x += 1) {
+      const tile = prefab.tileMap[y * prefab.w + x];
+      if (tile !== ROOM_PREFAB_CELL_FLOOR && tile !== ROOM_PREFAB_CELL_WALL) {
+        continue;
+      }
+      previewCtx.fillStyle = "#efefef";
+      previewCtx.fillRect(
+        x * ROOM_PREFAB_TILE_PIXEL,
+        y * ROOM_PREFAB_TILE_PIXEL,
+        ROOM_PREFAB_TILE_PIXEL,
+        ROOM_PREFAB_TILE_PIXEL
+      );
+    }
+  }
+
+  drawThinExteriorWallsForRooms(
+    previewCtx,
+    0,
+    0,
+    [{ x: 0, y: 0, w: prefab.w, h: prefab.h }],
+    prefab.tileMap,
+    prefab.w,
+    ROOM_PREFAB_TILE_PIXEL,
+    ROOM_PREFAB_CELL_WALL
+  );
+}
+
+function renderRoomPrefabCatalog(prefabs) {
+  if (!roomPrefabGrid) {
+    return;
+  }
+
+  roomPrefabGrid.innerHTML = "";
+
+  for (const prefab of prefabs) {
+    const card = document.createElement("article");
+    card.className = "corridor-tile-card";
+
+    const title = document.createElement("h3");
+    title.className = "corridor-tile-title";
+    title.textContent = `${prefab.id} | ${prefab.w}x${prefab.h}`;
+
+    const canvasEl = document.createElement("canvas");
+    canvasEl.className = "room-prefab-canvas";
+    canvasEl.setAttribute("aria-label", `Room prefab ${prefab.id}, ${prefab.w} by ${prefab.h}`);
+    drawRoomPrefabPreview(canvasEl, prefab);
+
+    const stats = document.createElement("p");
+    stats.className = "corridor-tile-sockets";
+    stats.textContent = `Footprint: ${prefab.w}x${prefab.h} | Area: ${prefab.w * prefab.h}`;
+
+    card.append(title, canvasEl, stats);
+    roomPrefabGrid.appendChild(card);
+  }
+
+  if (roomPrefabsMeta) {
+    roomPrefabsMeta.textContent = `${prefabs.length} room prefabs available for placement tests.`;
+  }
+}
+
 function drawNextGeneratorRandomized(patterns, accessCatalogue) {
   nextgenCtx.fillStyle = "#ffffff";
   nextgenCtx.fillRect(0, 0, nextgenCanvas.width, nextgenCanvas.height);
-  const assignments = buildNextgenAssignments(patterns);
-  const passResult = enforceNextgenConnections(assignments, patterns);
+  const bounds = nextgenBounds();
+  const assignments = buildNextgenAssignments(patterns, bounds);
+  const passResult = enforceNextgenConnections(assignments, patterns, bounds);
   const assignmentLines = [];
 
-  for (let cy = -RADIUS; cy <= RADIUS; cy += 1) {
-    for (let cx = -RADIUS; cx <= RADIUS; cx += 1) {
+  for (let cy = bounds.minY; cy <= bounds.maxY; cy += 1) {
+    for (let cx = bounds.minX; cx <= bounds.maxX; cx += 1) {
       const assignment = assignments.get(coordKey(cx, cy));
       const chunkSpecials = generateChunkSpecialSpaces(assignment.sockets, cx, cy);
       const chunkAccess = placeChunkAccessCorridors(chunkSpecials.tileMap, cx, cy, accessCatalogue);
       const chunkRooms = generateChunkRooms(chunkAccess.tileMap, cx, cy);
 
-      const gridX = cx + RADIUS;
-      const gridY = cy + RADIUS;
+      const gridX = cx - bounds.minX;
+      const gridY = cy - bounds.minY;
       const pixelX = gridX * (CHUNK_PIXELS + CHUNK_GAP);
       const pixelY = gridY * (CHUNK_PIXELS + CHUNK_GAP);
 
-      drawCorridorChunk(nextgenCtx, pixelX, pixelY, chunkRooms.tileMap);
+      drawCorridorChunk(nextgenCtx, pixelX, pixelY, chunkRooms);
 
       nextgenCtx.fillStyle = "#bb0000";
       nextgenCtx.font = "12px Consolas, monospace";
@@ -1543,7 +2421,7 @@ function drawNextGeneratorRandomized(patterns, accessCatalogue) {
                 return `${a.set}:${tileLabel}${shapeMarker}@${a.x},${a.y}(${a.w}x${a.h})`;
               })
               .join(" | ");
-      const roomsSummary = `rooms ${chunkRooms.roomZoneCount}, doors ${chunkRooms.doorCount}, doorless ${chunkRooms.doorlessRooms}, undersized ${chunkRooms.undersizedRooms}, unfilled ${chunkRooms.unfilledCount}`;
+      const roomsSummary = `rooms ${chunkRooms.roomZoneCount}, doors ${chunkRooms.doorCount}, doorless ${chunkRooms.doorlessRooms}, undersized ${chunkRooms.undersizedRooms}, unfilled ${chunkRooms.unfilledCount}, prefab-uncovered ${chunkRooms.uncoveredPrefabArea}`;
       assignmentLines.push(
         `Chunk (${cx},${cy}) -> tile ${assignment.tileId}, rotation ${assignment.rotationTurns * 90}deg, rerolls ${assignment.rerollIndex}, connected ${connected ? "yes" : "no"}, spaces ${spacesSummary}, specials ${specialsSummary}, access ${accessSummary}, rooms ${roomsSummary}`
       );
@@ -1596,6 +2474,7 @@ function drawWorldPreview(patterns, accessCatalogue) {
   let totalDoorless = 0;
   let totalUndersized = 0;
   let totalUnfilled = 0;
+  let totalPrefabUncovered = 0;
 
   for (let cy = bounds.minY; cy <= bounds.maxY; cy += 1) {
     for (let cx = bounds.minX; cx <= bounds.maxX; cx += 1) {
@@ -1610,7 +2489,7 @@ function drawWorldPreview(patterns, accessCatalogue) {
         worldPreviewCtx,
         pixelX,
         pixelY,
-        chunkRooms.tileMap,
+        chunkRooms,
         WORLD_PREVIEW_TILE_PIXELS,
         false
       );
@@ -1620,11 +2499,12 @@ function drawWorldPreview(patterns, accessCatalogue) {
       totalDoorless += chunkRooms.doorlessRooms;
       totalUndersized += chunkRooms.undersizedRooms;
       totalUnfilled += chunkRooms.unfilledCount;
+      totalPrefabUncovered += chunkRooms.uncoveredPrefabArea;
     }
   }
 
   if (worldPreviewMeta) {
-    worldPreviewMeta.textContent = `Seed: ${NEXTGEN_SEED} | Area: ${WORLD_PREVIEW_CHUNKS_X}x${WORLD_PREVIEW_CHUNKS_Y} chunks | Connection passes: ${passResult.passesRun} | Rerolls: ${passResult.totalRerolls} | Rooms: ${totalRooms} | Doors: ${totalDoors} | Doorless: ${totalDoorless} | Undersized: ${totalUndersized} | Unfilled: ${totalUnfilled}`;
+    worldPreviewMeta.textContent = `Seed: ${NEXTGEN_SEED} | Area: ${WORLD_PREVIEW_CHUNKS_X}x${WORLD_PREVIEW_CHUNKS_Y} chunks | Connection passes: ${passResult.passesRun} | Rerolls: ${passResult.totalRerolls} | Rooms: ${totalRooms} | Doors: ${totalDoors} | Doorless: ${totalDoorless} | Undersized: ${totalUndersized} | Unfilled: ${totalUnfilled} | Prefab-uncovered: ${totalPrefabUncovered}`;
   }
 }
 
@@ -1662,6 +2542,7 @@ const accessCorridorCatalogue = buildAccessCorridorCatalogue(corridorPatterns);
 drawNextGeneratorRandomized(corridorPatterns, accessCorridorCatalogue);
 renderCorridorTileCatalog(corridorPatterns);
 renderAccessCorridorCatalog(accessCorridorCatalogue);
+renderRoomPrefabCatalog(ROOM_PREFAB_CATALOG);
 
 if (openWorldPreviewButton) {
   openWorldPreviewButton.addEventListener("click", () => {
