@@ -1,46 +1,49 @@
 # Un-Dead Hotel
 
-**Un-Dead Hotel** is a web-based, real-time post-apocalyptic colony management game hosted on GitHub Pages. Inspired by games like *RimWorld*, *Fallout Shelter*, and *Project Zomboid*, players must manage a group of survivors, scavenge for resources, and defend against the undead. 
+Un-Dead Hotel is a browser-based procedural generation sandbox for an infinite hotel survival game.
 
-The catch? The game takes place entirely within **"Hilbert's"**—a procedurally generated, infinitely expanding hotel. 
+## Current Debug Build
 
-## 🏨 The Setting: Hilbert's Hotel
-The hotel acts as the infinite, procedurally generated world of the game. The name "Hilbert's" is an ode to the famous infinite hotel paradox. While the game doesn't implement any complex paradox mechanics, the infinite nature of the building is the core flavor of the environment.
-* **Infinite Layout:** There is no top and no bottom to the hotel. Because it is procedurally generated, players can stumble upon multiple gyms, restaurants, SPAs, kitchens, and rooms.
-* **The "Rooftops":** Every floor features large exterior balconies and terraces that act as "rooftops," meaning players have outdoor access regardless of what floor they are on.
-* **Base Building:** There are no arbitrary base boundaries or "room claiming" mechanics. Your base is defined simply by survivor presence. You can make your safe zone as large or as small as you want.
+The app currently runs one active hotel generator architecture (the former "right side" panel).  
+The legacy left-side generator and its validation panel are removed.
 
-## 🎮 Core Gameplay & Visuals
-* **Perspective:** Top-down view with simplistic graphics.
-* **Real-Time Strategy:** The game runs in real-time (not turn-based).
-* **Fog of War:** A strict fog of war is in effect. Unexplored areas, or areas not currently being looked at, are hidden. Visibility is determined by a "cone of vision" attached to each survivor.
-* **The Goal:** There is no end game. The immediate short-term goal is simply to stay alive by finding food; the long-term goal is infinite survival.
+Implemented debug views:
 
----
+- `3x3` chunk generator view (active architecture)
+- Corridor tile catalog
+- Access corridor catalogue
+- Full-screen `20x20` chunk preview screen (opened from button)
 
-## 🚀 Development Roadmap
+## Current Procedural Rules (Implemented)
 
-### Phase 1: Minimum Viable Product (MVP)
-The MVP will focus on establishing the core survival loop, basic AI, and world generation on a single horizontal plane.
+- Deterministic seeded generation per chunk coordinate.
+- Corridor tile assignment uses a fixed tile catalog (`Tile 1-5`) with seeded rotation.
+- A second pass enforces neighbor connectivity (reroll + deterministic forced pair fallback).
+- Special spaces are placed chunk-locally in size-priority order.
+- Special-space roll chance is `30%` per special (`SPECIAL_SPACE_CHANCE_PERMILLE = 300`).
+- Access corridor placement uses a precomputed catalogue as the single source of truth.
+- Remaining space is converted into rooms with:
+  - minimum size target logic (`>= 5x5` intent),
+  - corridor-adjacent doors,
+  - merge behavior for invalid rooms,
+  - no remaining fillable empty room space.
 
-* **World Generation:** The entire MVP takes place on a single, infinitely generating floor of Hilbert's Hotel. 
-* **Survivors:** * Spawn inside locked hotel rooms for the player to discover.
-  * Players have **full, direct control** over survivor actions (simple worker units).
-  * Survivors can scavenge and craft basic weapons.
-* **Zombies:** * Modeled after *The Walking Dead*: slow, dumb, and aimlessly wandering.
-  * They will attack players on sight.
-  * Infinite zombie spawns are explained by their access to the hotel's infinite stairwells.
-* **Resources (Early Game):** * Scavenge for food and supplies in hotel kitchens and mini-bars. 
+## Special Spaces
 
-### Phase 2: Advanced Mechanics & Expansions
-Once the MVP is stable, development will shift toward realism, automation, and expanding the Z-axis.
+Special types currently in use:
 
-* **Vertical Expansion:** Expanding the procedural generation to include multiple stories (navigated via stairs).
-* **Resource Shut-offs:** Like *Project Zomboid*, the hotel's infinite water and electricity will eventually shut off as the apocalypse progresses.
-* **Self-Sustainability (Late Game):**
-  * **Power:** Scavenging solar power banks to set up on the terrace/rooftops.
-  * **Water:** Setting up rainwater collection systems on the terraces.
-  * **Food:** Building bootleg hydroponics, setting up window-sill farms, and hunting birds on the exterior rooftops.
-* **Survivor Evolution:**
-  * **Spawning Logic:** To maintain realism (as locked-in survivors would eventually starve), the probability of finding survivors in locked rooms will decrease over time. New survivors will instead arrive via the stairwells.
-  * **Autonomy:** Transitioning from direct control to giving survivors free will, personalities, and autonomous behaviors.
+- Terrace
+- Restaurant
+- Gym
+- Kitchen
+- SPA
+
+Size/orientation and placement constraints are defined in `main.js` and documented in `PROCEDURAL_GEN_SYSTEM.md`.
+
+## Running
+
+Open `index.html` via the local static server workflow you already use in this repo, then use:
+
+- main generator canvas for `3x3`,
+- `Open 20x20 Chunk Preview` for full-screen world-scale inspection.
+

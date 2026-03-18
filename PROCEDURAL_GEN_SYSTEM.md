@@ -1,164 +1,121 @@
-# Procedural Generation System (Current Implementation)
+# Procedural Generation System (Current)
 
-This document describes what is actually implemented right now, how it works, and what is still missing compared to `PROCEDURAL_GEN_PLAN.md`.
+This document describes the generator that is actually running in `main.js` right now.
 
 ## Scope
-- Status: implemented baseline only
-- Floor: `Z = 0` only
-- Chunk size: `32 x 32`
-- Implemented output: deterministic halls + zones + fail-fast prefabs + pattern-catalog rooms/walls/doors
 
-## Code Map
-- Generator core: `engine/procgen.js`
-- Debug visualizer and seam checks: `main.js`
-- Static file hosting for browser: `server.js`
+- Active architecture: corridor-tile pipeline only
+- Legacy left-side generator: removed from UI and runtime flow
+- Chunk size: `32x32`
+- Main debug render: `3x3` chunks
+- World-scale debug render: full-screen `20x20` chunks
 
-## What The Current Generator Does
+## Runtime Views
 
-### 1. Deterministic hash utilities
-`engine/procgen.js` implements:
-- `fnv1a32(input)` for stable 32-bit hashing
-- `hashParts(...parts)` to hash joined key parts
+- `Corridor Tile Generator (3x3)` panel
+- `Corridor Tile Catalog`
+- `Access Corridor Catalogue`
+- Full-screen `20x20` preview screen (`Open 20x20 Chunk Preview`)
 
-This is used for chunk and edge determinism.
+## Core Seed Model
 
-### 2. Canonical shared edge IDs
-For each side (`N/S/E/W`) of a chunk:
-1. Find neighbor coordinates for that side.
-2. Sort the two chunk endpoints lexicographically.
-3. Build edge id:
-- Vertical: `V_minX_minY_maxX_maxY`
-- Horizontal: `H_minX_minY_maxX_maxY`
-4. Hash edge id with world seed and version key.
+- Base seed: `WORLD_SEED`
+- Version: `GENERATOR_VERSION`
+- Composite generation seed: `NEXTGEN_SEED = WORLD_SEED|corridor-tiles|GENERATOR_VERSION`
+- Random picks use deterministic `seededIndex(...)` hashing.
 
-Result:
-- Both chunks touching the same border compute the same edge id and hash.
-- Socket seam agreement is deterministic.
+## Pipeline Per Chunk
 
-### 3. Socket activation from edge hashes
-Each canonical edge hash currently uses:
-- `open = edgeKey % 100 < 35`
+For each chunk in the active view bounds:
 
-So base socket probability is 35% before artery forcing.
+1. Pick corridor tile id (`1-5`) + rotation (seeded).
+2. Enforce inter-chunk connectivity with rerolls and deterministic force-pair fallback.
+3. Carve base corridor tile map.
+4. Place special spaces.
+5. Place access corridor tiles from catalogue.
+6. Generate rooms over remaining room-fillable space.
 
-### 4. Artery-grid forcing (global traversability backbone)
-Artery forcing is boundary-based (not chunk-local), which fixed prior seam mismatches.
+## Corridor Tile Catalog
 
-Rules:
-- `E` forced when `(chunkX + 1) % 4 === 0`
-- `W` forced when `chunkX % 4 === 0`
-- `S` forced when `(chunkY + 1) % 4 === 0`
-- `N` forced when `chunkY % 4 === 0`
+- Built from unique socket families (rotations collapsed).
+- Displayed as `Tile 1` to `Tile 5`.
+- Runtime rotates selected tiles per chunk instead of storing rotated variants.
 
-This guarantees both sides of the same boundary make the same artery decision.
+## Connectivity Enforcement
 
-### 5. Hallway carving to center lanes
-If a side socket is active, halls are carved:
-- Vertical halls use center columns `15` and `16`
-- Horizontal halls use center rows `15` and `16`
-- Tile type used: `FLOOR_HALL`
-- If a chunk has zero active sockets, a center `2x2` hall anchor is carved so room-door connectivity remains possible.
+- Chunk must connect to at least one in-bounds neighbor by corridor sockets.
+- Passes:
+  - reroll assignment up to configured limit,
+  - if still disconnected, force a matching pair with a neighbor.
 
-Current tile set:
-- `EMPTY`
-- `FLOOR_HALL`
-- `FLOOR_PREFAB`
-- `FLOOR_ROOM`
-- `WALL`
-- `DOOR`
+## Special Space Generation
 
-### 6. API output
-`generateChunkGeometry(x, y, worldSeed, generatorVersion)` returns:
-- `chunkX`, `chunkY`, `chunkSize`
-- `tiles` (`Uint8Array`)
-- `prefabs` (`[{id,x,y,w,h,rollPermille}]`)
-- `zoneCandidates` (pre-prefab empty-space rectangles)
-- `zones` (`[{x,y,w,h,area}]`) covering all untouched empty tiles
-- `rooms` (`[{id,zoneIndex,x,y,w,h,area,doors[],connectedToHall}]`)
-- `unresolvedZones` (zones too small for current BSP constraints)
-- `roomCoverageArea`
-- `allRoomsConnected`
-- `accessReservedArea`
-- `buildZones` (post-access, pre-room empty rectangles)
-- `activeSockets` (`N/S/E/W`)
-- `seedInfo` (`chunkSeed`, per-edge metadata, forced-by-artery flags)
+Specials are processed in order (largest to smallest):
 
-### 7. Debug tooling
-`main.js` renders a 3x3 chunk window around `(0,0)` and reports:
-- Deterministic replay check (same chunk generated twice)
-- Seam consistency check (`E` vs neighbor `W`, `S` vs neighbor `N`)
-- Center-chunk zone summary and zone coverage validation
-- Center-chunk prefab summary and prefab rectangle overlay
-- Center-chunk room connectivity summary and room overlays
+1. Terrace
+2. Restaurant
+3. Gym
+4. Kitchen
+5. SPA
 
-### 8. Prefab fit/skip (implemented)
-- Catalog currently includes one test prefab: `gym_test`.
-- Spawn roll is deterministic per chunk and prefab id.
-- If rolled, generator searches `zoneCandidates` for an eligible zone.
-- Special buildings claim entire selected zones (`full_zone` mode), not partial fixed-size footprints.
-- Candidate zones must be hallway-adjacent (prefabs always touch hall network).
-- If no fit exists, prefab is skipped immediately.
-- No retries, no rerolls, no geometry reshaping.
+Current rules:
 
-### 9. BSP room generation (implemented)
-- Remaining `zones` are processed with a two-pass approach:
-- Pass A: reserve deterministic 2-tile access corridors per zone.
-- Pass B: run BSP room generation on post-access `buildZones`.
-- BSP splitting is deterministic (`MIN_ROOM_W/H`, recursion cap).
-- Each leaf room is carved with:
-- Border tiles as `WALL`
-- Interior tiles as `FLOOR_ROOM`
-- Access corridors are carved as `FLOOR_HALL` and are `2 tiles` wide.
-- Corridors are reserved before room carving, so they do not cut through existing rooms.
-- Hall doors are placed where rooms face hall tiles.
-- Invariant in current implementation:
-- room placement never retries
-- room overlaps are prevented by carving only from post-access empty parcels
-- each carved room receives at least one hall door
+- Roll chance per special: `30%` (`SPECIAL_SPACE_CHANCE_PERMILLE = 300`)
+- Must touch an existing corridor.
+- Rotation is allowed.
+- `15x7` specials (`kitchen`, `spa`) are constrained to top/bottom chunk edges.
+- Gym sizes: `15x15` or `32x15` (with rotation allowed).
+- Gym expansion rule:
+  - if a placed `15x15` gym has adjacent empty `2x15` or `15x2` strip,
+  - it may expand to `17x15` or `15x17` (seeded side choice when multiple valid strips exist).
 
-## What Is Missing (Compared To Plan)
+## Access Corridor Catalogue (Single Source Of Truth)
 
-## Generation pipeline gaps
-- Missing: formal post-generation connectivity validation/degradation policy in docs (code currently applies practical fallbacks but not a separately declared policy contract).
+Catalogue entries are precomputed once and reused for both:
 
-## Data model gaps
-- Missing: geometry layer separation beyond halls.
-- Missing: entity placement hooks.
+- visual catalogue rendering
+- actual placement in chunks
 
-## Persistence gaps
-- Missing: `WorldDelta` event schema in runtime.
-- Missing: event recording on world mutations.
-- Missing: chunk load replay of delta events.
-- Missing: IndexedDB persistence and hydration.
-- Missing: autosave timer and unload flush implementation.
+Footprint sets:
 
-## Versioning/migration gaps
-- Partial: `generatorVersion` is accepted by API.
-- Missing: version-router that dispatches to legacy generators (`v1`, `v2`, etc).
-- Missing: per-chunk saved `generatorVersion` contract in durable state.
+- Set 1: `17x15`, `15x17`
+- Set 2: `15x15`
+- Set 3: `32x15`, `15x32`
+- Set 4: `15x8` (blank-only currently)
 
-## Performance/system gaps
-- Missing: chunk manager (load/unload radius around survivors/camera).
-- Missing: memory pooling/reuse policy.
-- Missing: delta compaction system.
-- Missing: runtime telemetry for generation cost.
+Placement behavior:
 
-## Current Risks
-- Visual repetition risk from fixed artery spacing (`4`) is not mitigated yet.
-- No persistent state means refresh loses all dynamic changes (once gameplay starts).
-- Current debug seam checks are local to rendered 3x3 view unless separately scripted.
+- Identify remaining empty spaces.
+- Process spaces largest-first.
+- Try footprint sets largest-first.
+- Candidate tile must touch existing corridor.
+- Carve corridors and reserve non-corridor cells for room pass.
 
-## Recommended Next Build Order
-1. Implement `WorldDelta` event schema in memory.
-2. Record mutations during runtime and replay on chunk load.
-3. Add IndexedDB persistence + autosave/on-unload flush.
-4. Add generator version router + per-chunk saved generator version.
-5. Add chunk manager for load/unload radius and pooling.
+## Room Generation
 
-## Definition of Done For This Baseline
-The current baseline is considered done when:
-- Any tested adjacent chunk pair has matching seams.
-- Generation is deterministic for fixed `(seed, x, y, version)`.
-- Artery boundaries are enforced symmetrically across chunk borders.
+Rooms are generated after specials and access corridors.
 
-Those conditions are currently met.
+Implemented behavior:
+
+- Room-fillable tiles are `EMPTY` and `ACCESS_RESERVED`.
+- Initial room partitioning uses target size heuristics.
+- Invalid rooms are merged into adjacent rectangular neighbors when possible.
+- Room considered invalid if undersized or lacking corridor-adjacent door candidates.
+- Doors are placed only on corridor-adjacent, non-corner wall tiles.
+- Fillable leftovers are consumed so no room-fillable empty tiles remain.
+
+Reported per chunk:
+
+- room count
+- door count
+- doorless count
+- undersized count
+- unfilled count
+
+## 20x20 Preview Screen
+
+- Opens as full-screen page replacement (not modal).
+- Generates and renders `20x20` chunks with no visual gaps between chunks.
+- Uses same pipeline and seed model as the 3x3 panel.
+- Shows summary metrics (passes, rerolls, rooms, doors, etc.).
+

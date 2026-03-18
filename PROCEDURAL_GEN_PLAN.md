@@ -1,174 +1,288 @@
-# Procedural Generation Implementation Plan
-Project: Un-Dead Hotel
-Module: Infinite World Generation (MVP - Single Floor)
+# Procedural Generation Plan
 
-## Overview
-This document defines the MVP world generation strategy for Hilbert's Hotel on a single infinite floor (`Z = 0`). The system must be:
+Project: Un-Dead Hotel  
+Module: Hotel floor generation (current debug implementation + production hardening path)
 
-- Deterministic: the same world seed and chunk coordinates always regenerate the same static layout.
-- Seamless: chunk borders always stitch correctly.
-- Traversable: the global world graph must never isolate players in chunk islands.
-- Performant: only nearby chunks are loaded.
-- Persistent: player impact survives unload/reload via durable delta state.
+This plan is intentionally detailed and execution-oriented. It reflects the **current single active generator architecture** (corridor-tile pipeline only) and defines the next build sequence.
 
-The architecture uses chunked generation, shared edge keys, an artery-grid connectivity guarantee, zone-first hallway layout, prefab insertion, and BSP room subdivision.
+## 1) Purpose
 
-## Core Constants
-- Scale: `1 tile = 1 meter`
-- Chunk size: `32 x 32 tiles` (indices `0..31`)
-- Main inter-chunk hall width: `2 tiles`
-- Center hall indices on a 32-wide chunk: `15` and `16`
-- Standard room door width: `1 tile`
-- MVP floors: `Z = 0` only
-- Artery spacing: every `4` chunks
-- Autosave interval: every `60` seconds
-- Generator version (current): `v1`
+Build a robust, deterministic, scalable hotel floor generator that:
 
-## Deterministic Seed Model
-Each chunk has a master seed:
+- preserves strong connectivity and path readability,
+- places special spaces and access corridors coherently,
+- fills all remaining usable area with valid rooms,
+- scales from debug `3x3` sampling to broader `20x20` inspection and future runtime chunk streaming.
 
-`chunkSeed = hash(WorldSeed, ChunkX, ChunkY, "chunk_v1")`
+## 2) Current State (Accurate Baseline)
 
-That seed is immediately split into independent streams to avoid sequence drift:
+The current system (documented in `PROCEDURAL_GEN_SYSTEM.md`) already has:
 
-- `rng_geo = RNG(hash(chunkSeed, "geo"))` for walls, rooms, halls, sockets
-- `rng_loot = RNG(hash(chunkSeed, "loot"))` for item placement
-- `rng_ai = RNG(hash(chunkSeed, "ai"))` for ambient zombie/survivor spawn state
+- deterministic seeded generation (`NEXTGEN_SEED` + coordinate hashing),
+- corridor tile catalog (`Tile 1-5`) with seeded rotation,
+- connectivity enforcement pass (reroll + forced pair fallback),
+- chunk-local special-space placement by size priority,
+- access corridor catalog used as single source of truth (catalog + generation),
+- room pass with merge behavior and corridor-adjacent door targeting,
+- full-screen `20x20` preview with no visible chunk gaps.
 
-Changing loot or AI rules must not alter geometry.
+Known current constraints:
 
-## Shared Edge Key Contract (Socket Matching + Canonicalization)
-Sockets are never rolled independently per chunk side. They are rolled from shared, canonical edge keys.
+- generation is still debug-oriented and centralized in `main.js`,
+- cross-chunk special placement is not implemented,
+- validation/reporting exists but is not formalized as strict fail criteria in all flows.
 
-Canonical edge construction:
-1. Build the two chunk endpoints for that boundary: `A(x1,y1)` and `B(x2,y2)`.
-2. Sort endpoints lexicographically (`min` then `max`) so negative coordinates are stable.
-3. Build edge id:
-   - Vertical boundary: `V_[minX]_[minY]_[maxX]_[maxY]`
-   - Horizontal boundary: `H_[minX]_[minY]_[maxX]_[maxY]`
-4. Hash that id:
-   - `edgeKey = hash(WorldSeed, edgeId, "edge_v1")`
+## 3) Design Objectives
 
-Because both neighboring chunks canonicalize first, both sides always query the exact same key.
+### 3.1 Determinism
 
-Example:
-- West edge of chunk `(0,0)` and east edge of chunk `(-1,0)` both canonicalize to `V_-1_0_0_0`.
+For fixed `(world seed, generator version, chunk coordinate)`, geometry and placement outcomes must be identical across runs.
 
-## Global Traversability Guarantee (Artery Grid Rule)
-To prevent isolated chunk islands, arterial connectors override random edge activation.
+### 3.2 Structural Reliability
 
-- If `ChunkX % 4 === 0`, force `East` and `West` sockets active.
-- If `ChunkY % 4 === 0`, force `North` and `South` sockets active.
-- Non-artery edges may still use RNG.
+Generated chunks should satisfy:
 
-Result:
-- Infinite guaranteed hallway lattice across the world.
-- Local chunks between arteries can still produce dead-ends, loops, and variation without breaking global reachability.
+- no disconnected chunk in active bounds after connectivity pass,
+- no room-fillable leftover voids after room fill stage,
+- no final room without a corridor-adjacent door,
+- no final room below minimum size target after merge resolution.
 
-## Generation Pipeline (Zone-First / Cross-Hall)
-When generating a new `32x32` chunk:
+### 3.3 Controlled Variety
 
-1. Resolve edge sockets from canonical shared edge keys.
-2. Apply artery-grid overrides (`X % 4`, `Y % 4`) to force required global connectors.
-3. Draw main `2 tile` halls from active sockets straight to center (`15-16` lanes).
-4. Merge center overlaps into cross or T/L topology.
-5. Derive rectangular sub-zones formed by straight hallway slices.
-6. Prefab placement (fail-fast, no retries):
-   - Evaluate each sub-zone for eligible prefab fit (gym, spa, restaurant, etc.).
-   - Place prefab only if it fits and keeps required hall connectivity.
-   - If no valid fit exists, skip prefab immediately.
-   - Do not reroll, do not reshape chunk, do not loop.
-7. BSP room generation:
-   - Run BSP only on untouched rectangular sub-zones.
-   - Stop at minimum room size (for example `4x4`).
-   - Place `1 tile` doors from rooms to hallway network.
-8. Validation pass (single pass, O(1) behavior):
-   - Ensure all active sockets are connected to the main hall network.
-   - Ensure placed prefab entrances connect to the hall network.
-   - On violation, apply deterministic one-shot degradation (remove offending prefab footprint only), then continue.
+Variation should come from:
 
-This order prevents irregular leftovers from breaking BSP and avoids prefab-caused corridor severing.
+- tile choice/rotation,
+- special-space roll/fit ordering,
+- access-corridor tile fitting,
+- room partition and merge decisions,
 
-## Static Geometry vs Dynamic World State (Event-Sourced Delta Model)
-Static geometry is regenerated from seed. Dynamic player impact is stored separately as mutation events.
+while preserving deterministic replay.
 
-- Static (not saved per chunk): floors, walls, room partitions, base hallway layout.
-- Dynamic (saved in `WorldDelta`): dropped items, broken doors, barricades, corpse state, opened containers, etc.
+### 3.4 Scale Readiness
 
-`WorldDelta` contract:
-- Key: `"x,y,z"`
-- Value: `{ generatorVersion, events[] }`
-- Event example: `{ action: "DESTROY_DOOR", x: 5, y: 5 }`
+The same generation rules should hold for:
 
-### Persistence Backend (Web / GitHub Pages)
-Durable storage is IndexedDB.
+- local debug windows (`3x3`),
+- larger sampled windows (`20x20`),
+- eventual chunk streaming at runtime.
 
-- In-memory `WorldDelta` cache is the hot runtime copy.
-- Flush cache to IndexedDB every `60` seconds.
-- Force flush on `window.onbeforeunload`.
+## 4) Non-Goals (For This Plan Horizon)
 
-### Chunk Load Flow
-1. Generate static chunk geometry from deterministic pipeline.
-2. Read `WorldDelta[x,y,z]` from memory/IndexedDB.
-3. Replay `events[]` to mutate static geometry/entity state.
-4. Spawn/render final resolved state.
+- Multi-floor navigation generation (`Z > 0`) is deferred.
+- Full gameplay entity simulation (AI, combat, loot economy) is deferred.
+- Artistic tile rendering and final UX polish are secondary to generation correctness.
 
-### Chunk Unload Flow
-1. Do not diff against baseline geometry.
-2. Persist already-recorded mutation events for that chunk.
-3. Release chunk memory.
+## 5) Generation Contract (Target)
 
-## Generator Versioning and Migration (Legacy Preservation)
-Goal: protect existing player bases when generation logic changes.
+Per chunk, pipeline order remains:
 
-- Every chunk delta records `generatorVersion` at first visit (for example `v1`).
-- New game updates may introduce `v2`, `v3`, etc., but old generator code paths remain in codebase.
-- On load:
-  - If chunk delta says `v1`, generate static chunk with `v1`.
-  - If chunk is unexplored, generate with current version and store that version.
+1. corridor assignment (seeded tile + rotation),
+2. connectivity correction pass,
+3. base corridor carving,
+4. special-space placement,
+5. access-corridor placement from catalog,
+6. room generation/merge/door pass,
+7. validation + metrics emission.
 
-This enables backward compatibility: old explored chunks remain stable while new territory uses newer generation rules.
+Any future stage added to pipeline must declare:
 
-## Data Structures (Conceptual)
-```javascript
-const TILE_TYPES = {
-  EMPTY: 0,
-  FLOOR_HALL: 1,
-  FLOOR_ROOM: 2,
-  WALL: 3,
-  DOOR: 4,
-  PREFAB_FLOOR: 5,
-  PREFAB_WALL: 6
-};
+- deterministic input keys,
+- mutation boundaries (what tile states it may change),
+- post-stage invariants.
 
-class Chunk {
-  constructor(x, y, z, worldSeed) {
-    this.x = x;
-    this.y = y;
-    this.z = z; // MVP: always 0
-    this.worldSeed = worldSeed;
-    this.seed = hash(worldSeed, x, y, "chunk_v1");
-    this.tiles = new Uint16Array(32 * 32);
-    this.entities = [];
-  }
-}
+## 6) Data and Rule Contracts
 
-// Runtime cache of durable chunk deltas.
-const worldDelta = new Map(); // key: "x,y,z" -> { generatorVersion, events[] }
-```
+### 6.1 Tile Semantics
 
-## Performance Notes
-- Chunk activation: load/generate only chunks near survivors and camera bounds.
-- Render culling: draw only visible viewport tiles and in-FOV tiles.
-- Pooling: recycle chunk objects/arrays where practical.
-- Delta compaction: periodically squash old event chains into minimal snapshot + tail events.
-- Persistence batching: coalesce IndexedDB writes on autosave tick to reduce IO overhead.
+Keep clear semantic ownership:
 
-## MVP Success Criteria
-- Adjacent chunks always stitch with matching sockets.
-- Geometry is deterministic across reloads for same seed and coordinates.
-- Global chunk network remains traversable due to artery-grid guarantees.
-- Prefab placement is fail-fast and never causes retry loops.
-- BSP executes only on valid rectangles.
-- Player-made changes persist after tab refresh/restart via IndexedDB.
-- Explored chunks preserve historical generator versions across game updates.
+- `1` corridor network,
+- special-space fill codes,
+- access-reserved fill state,
+- room floor/wall/door states.
+
+No stage may overwrite an earlier stage's protected semantic state unless explicitly allowed by policy.
+
+### 6.2 Catalog Ownership
+
+Access corridor catalog remains single source of truth:
+
+- precomputed `tileMap` entries,
+- same entries used by visual catalog and placement logic,
+- no duplicate procedural carving path for runtime-only variants.
+
+### 6.3 Special-Space Priority and Constraints
+
+Specials continue largest-to-smallest allocation with deterministic roll + pick logic.
+
+Constraint examples currently in scope:
+
+- corridor contact requirement,
+- edge constraints for `15x7` types,
+- allowed rotation behavior,
+- gym-specific expansion rule from `15x15` to `17x15`/`15x17` when adjacent strip exists.
+
+## 7) Execution Roadmap
+
+## Phase A: Validation Hardening (Highest Priority)
+
+Goal: turn existing soft metrics into explicit generation quality guarantees.
+
+Deliverables:
+
+1. Formal validators per chunk:
+   - `unfilled === 0`,
+   - `doorless === 0`,
+   - `undersized === 0`,
+   - connectivity satisfied.
+2. Standard validation result object emitted by both `3x3` and `20x20` flows.
+3. UI summary for failed coordinates + reason codes.
+4. Debug toggle: stop-on-first-failure / collect-all-failures.
+
+Acceptance criteria:
+
+- For approved seed list and bounds list, validator pass rate is 100%.
+- Validator outputs are deterministic and stable across reload.
+
+## Phase B: Corridor and Access Catalog Quality
+
+Goal: increase meaningful variation while preserving navigability.
+
+Deliverables:
+
+1. Weighted selection support for corridor tiles.
+2. Weighted selection support for access tiles per footprint set.
+3. Rule-based filtering tags (example: high-throughput, branch-heavy, dead-end-light).
+4. Catalog-level sanity checks:
+   - connectivity touch potential,
+   - duplicate-equivalent pruning,
+   - footprint compatibility indexing.
+
+Acceptance criteria:
+
+- Distribution report shows non-flat, controlled usage by weights.
+- No increase in validator failures from Phase A baseline.
+
+## Phase C: Special Spaces Expansion
+
+Goal: improve special-space placement quality and reduce awkward fragmentation.
+
+Deliverables:
+
+1. Special placement scoring (corridor exposure, compactness impact, residual-space quality).
+2. Optional cross-chunk special-space prototype for large types.
+3. Conflict resolver policy between special footprint and access-corridor opportunities.
+4. Deterministic fallback ladder for no-fit cases.
+
+Acceptance criteria:
+
+- Higher placement success for intended specials at same roll chance.
+- Residual-space quality improves (fewer pathological slivers).
+
+## Phase D: Room System Refinement
+
+Goal: ensure room topology feels intentional and production-safe.
+
+Deliverables:
+
+1. Better merge heuristics beyond simple rectangular adjacency tie-breaks.
+2. Door scoring that prefers useful circulation over arbitrary pick.
+3. Optional archetype tagging for room metadata (future gameplay hook).
+4. Room graph extraction (room-to-corridor and room-to-room adjacency map).
+
+Acceptance criteria:
+
+- Maintains zero invalid-room metrics.
+- Improves room graph connectivity quality metrics over baseline.
+
+## Phase E: Runtime Integration
+
+Goal: decouple generator from debug page and prepare chunk streaming.
+
+Deliverables:
+
+1. Extract generator modules from `main.js` into reusable engine files.
+2. Define clean API:
+   - `generateChunk(seed, version, x, y, options)`,
+   - returns tile map + metadata + validation bundle.
+3. Add chunk manager interfaces for load/unload radius and caching.
+4. Add persistent delta strategy for world mutations (IndexedDB-backed).
+
+Acceptance criteria:
+
+- Debug page and runtime share the same generation core.
+- Chunk reload replays deterministic static geometry and persisted deltas correctly.
+
+## 8) Validation and Test Plan
+
+### 8.1 Determinism Tests
+
+- Golden seed snapshots for:
+  - `3x3` around `(0,0)`,
+  - `20x20` around configured origin,
+  - selected edge-case coordinates (negative/positive quadrants).
+
+### 8.2 Invariant Tests
+
+Per generated chunk:
+
+- connectivity invariant,
+- no room-fillable leftovers,
+- no doorless final room,
+- no undersized final room.
+
+### 8.3 Distribution/Balance Tests
+
+- Special spawn rate observed over large sample should match configured probability envelope.
+- Tile usage distribution should match configured weights within tolerance.
+
+### 8.4 Performance Sampling
+
+- `3x3` generation latency budget for interactive debugging.
+- `20x20` preview generation latency budget for one-shot view generation.
+- Memory footprint tracking for large sample renders.
+
+## 9) Metrics To Track
+
+Track and display (at minimum):
+
+- connection passes and total rerolls,
+- chunk-level validator failures by type,
+- special-space placements by type and size,
+- access tile usage by set/tile id,
+- room totals, door totals, and merge counts.
+
+## 10) Risks and Mitigations
+
+Risk: Rule interactions create hidden invalid states.  
+Mitigation: enforce strict post-stage validation and fail-fast diagnostics.
+
+Risk: Increased tile variety harms readability.  
+Mitigation: weighting + tag filtering + connectivity-aware scoring.
+
+Risk: Cross-chunk specials destabilize deterministic ordering.  
+Mitigation: deterministic region ordering and explicit ownership resolution rules.
+
+Risk: Refactor to modular engine causes behavior drift.  
+Mitigation: snapshot tests before/after extraction.
+
+## 11) Milestone Definition of Done
+
+A milestone is complete only when all are true:
+
+1. Feature behavior implemented.
+2. Determinism preserved on baseline seeds.
+3. Invariant validators pass on milestone test bounds.
+4. Documentation updated in:
+   - `PROCEDURAL_GEN_SYSTEM.md` (what exists),
+   - `PROCEDURAL_GEN_PLAN.md` (what's next),
+   - `README.md` (high-level user-facing summary).
+
+## 12) Immediate Next Implementation Slice
+
+Recommended next coding slice (small, high impact):
+
+1. Implement formal chunk validator object.
+2. Add validator aggregation for `20x20` screen.
+3. Surface failing chunk coordinates in preview metadata/report.
+4. Add deterministic test harness script for baseline seeds.

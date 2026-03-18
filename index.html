@@ -9,10 +9,38 @@
 <body>
   <main>
     <h1>Un-Dead Hotel Procedural Gen Debug</h1>
-    <p id="meta"></p>
-    <canvas id="debug-canvas" width="620" height="620" aria-label="Chunk debug view"></canvas>
-    <pre id="report"></pre>
+    <div class="top-controls">
+      <button id="open-world-preview" type="button">Open 20x20 Chunk Preview</button>
+    </div>
+    <section id="generator-lab" aria-label="Generator panels">
+      <article class="generator-panel">
+        <h2 class="generator-title">Corridor Tile Generator (3x3)</h2>
+        <p id="nextgen-meta"></p>
+        <canvas id="nextgen-canvas" width="620" height="620" aria-label="Next generator randomized view"></canvas>
+        <pre id="nextgen-report"></pre>
+      </article>
+    </section>
+    <section id="corridor-tiles" aria-labelledby="corridor-tiles-title">
+      <h2 id="corridor-tiles-title">Corridor Tile Catalog</h2>
+      <p id="corridor-tiles-meta">Baseline corridor presets (visual only, no generator logic changes).</p>
+      <div id="corridor-tile-grid" aria-label="Corridor tile previews"></div>
+    </section>
+    <section id="access-corridor-tiles" aria-labelledby="access-corridor-tiles-title">
+      <h2 id="access-corridor-tiles-title">Access Corridor Catalogue</h2>
+      <p id="access-corridor-tiles-meta">
+        Access corridor tile sets for room-building leftovers (2-tile-wide corridors).
+      </p>
+      <div id="access-corridor-tile-grid" aria-label="Access corridor tile previews"></div>
+    </section>
   </main>
+  <section id="world-preview-screen" class="world-preview-screen" hidden aria-label="20x20 chunk preview">
+    <header class="world-preview-header">
+      <h2 class="world-preview-title">20x20 Chunk Preview</h2>
+      <button id="close-world-preview" type="button">Back To Debug</button>
+    </header>
+    <p id="world-preview-meta"></p>
+    <canvas id="world-preview-canvas" aria-label="20 by 20 chunk procedural preview"></canvas>
+  </section>
   <script type="module" src="main.js"></script>
 </body>
 </html>
