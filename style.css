@@ -1,0 +1,40 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Consolas, "Courier New", monospace;
+  background: #ffffff;
+  color: #111111;
+}
+
+main {
+  padding: 12px;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+#meta {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+#debug-canvas {
+  display: block;
+  border: 1px solid #222222;
+  background: #ffffff;
+}
+
+#report {
+  margin: 10px 0 0;
+  padding: 8px;
+  border: 1px solid #d0d0d0;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
