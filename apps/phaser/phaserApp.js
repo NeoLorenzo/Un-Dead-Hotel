@@ -371,13 +371,10 @@ function createRuntimeScene(Phaser) {
     renderRuntimeFrame() {
       const width = this.scale.width;
       const height = this.scale.height;
+      const renderTilePixels = Math.max(1, Math.round(this.tilePixels));
       const snapshot = this.runtime.getFrameSnapshot(width, height, this.tilePixels);
       const visibleKeys = new Set();
-      const expectedPixelSize = Math.max(1, Math.round(snapshot.chunkSize * this.tilePixels));
-      const displayPixels = Math.max(
-        1,
-        Math.ceil(snapshot.chunkSize * this.tilePixels) + 1
-      );
+      const expectedPixelSize = Math.max(1, snapshot.chunkSize * renderTilePixels);
       let rebuildBudget = MAX_CHUNK_TEXTURE_REBUILDS_PER_FRAME;
       let pendingChunkTextures = 0;
 
@@ -388,12 +385,22 @@ function createRuntimeScene(Phaser) {
 
       for (const item of snapshot.visibleChunks) {
         const key = chunkKey(item.chunkX, item.chunkY);
-        const screenX = Math.round(
+        const left = Math.floor(
           (item.chunk.worldX - snapshot.cameraTile.x) * this.tilePixels + width / 2
         );
-        const screenY = Math.round(
+        const top = Math.floor(
           (item.chunk.worldY - snapshot.cameraTile.y) * this.tilePixels + height / 2
         );
+        const right = Math.floor(
+          (item.chunk.worldX + snapshot.chunkSize - snapshot.cameraTile.x) * this.tilePixels +
+            width / 2
+        );
+        const bottom = Math.floor(
+          (item.chunk.worldY + snapshot.chunkSize - snapshot.cameraTile.y) * this.tilePixels +
+            height / 2
+        );
+        const displayWidth = Math.max(1, right - left);
+        const displayHeight = Math.max(1, bottom - top);
         let cache = this.chunkTextures.get(key);
         let oldTextureKey = null;
 
@@ -410,8 +417,8 @@ function createRuntimeScene(Phaser) {
 
         if (cache) {
           const image = this.ensureChunkImage(key, cache.textureKey);
-          image.setPosition(screenX, screenY);
-          image.setDisplaySize(displayPixels, displayPixels);
+          image.setPosition(left, top);
+          image.setDisplaySize(displayWidth, displayHeight);
           image.setVisible(true);
 
           if (
@@ -422,14 +429,14 @@ function createRuntimeScene(Phaser) {
             this.textures.remove(oldTextureKey);
           }
         } else {
-          this.chunkFallbackGraphics.fillRect(screenX, screenY, displayPixels, displayPixels);
+          this.chunkFallbackGraphics.fillRect(left, top, displayWidth, displayHeight);
         }
 
         this.chunkBorderGraphics.strokeRect(
-          screenX + 0.5,
-          screenY + 0.5,
-          displayPixels - 1,
-          displayPixels - 1
+          left + 0.5,
+          top + 0.5,
+          displayWidth - 1,
+          displayHeight - 1
         );
 
         visibleKeys.add(key);
