@@ -1,0 +1,85 @@
+# Module API Reference
+
+This document summarizes the primary runtime-facing APIs in the current architecture.
+
+## Generation Layer
+
+### `engine/generation/chunkGenerator.js`
+
+Key exports used by runtime systems:
+
+- `buildCorridorTilePatterns()`
+- `buildAccessCorridorCatalogue(patterns)`
+- `buildSeededCorridorAssignment(patterns, cx, cy, rerollIndex?)`
+- `buildForcedCorridorAssignment(patterns, cx, cy, requiredSide, forceIndex?)`
+- `hasConnectingNeighbor(assignments, cx, cy)`
+- `generateChunkSpecialSpaces(sockets, cx, cy)`
+- `placeChunkAccessCorridors(baseTileMap, cx, cy, accessCatalogue)`
+- `generateChunkRooms(baseTileMap, cx, cy)`
+- constants for tile semantics and seed/version metadata
+
+## World Layer
+
+### `engine/world/worldStore.js`
+
+Factory:
+
+- `createWorldStore(options?)`
+
+Returned API:
+
+- `ensureChunk(cx, cy)` -> returns generated chunk payload
+- `ensureWindow(centerCx, centerCy, widthChunks, heightChunks)`
+- `getLoadedBounds()` -> `{ minX, maxX, minY, maxY }`
+- `getLoadedChunkCount()`
+- `getLoadedAssignmentCount()`
+
+### `engine/world/worldSurface.js`
+
+Factory:
+
+- `createWorldSurface(config)`
+
+Returned API:
+
+- `resizeToWindow(options?)` -> sets canvas pixel size
+- `render({ cameraTileX, cameraTileY, ensureChunk })` -> draws frame
+- `getViewportChunkBounds(cameraTileX, cameraTileY)`
+
+### `engine/world/cameraController.js`
+
+- `createCameraController({ chunkSize, initialTileX?, initialTileY? })`
+  - `moveBy(dxTiles, dyTiles)`
+  - `setTilePosition(tileX, tileY)`
+  - `getTilePosition()`
+  - `getChunkPosition()`
+- `cameraMoveFromKey(key, stepTiles)` -> `{ dx, dy } | null`
+
+### `engine/world/inputController.js`
+
+- `createKeyboardPanInput({ stepTiles, onMove, target? })`
+  - `start()`
+  - `stop()`
+
+### `engine/world/runtimeHud.js`
+
+- `createRuntimeHud({ element, seed, streamWidthChunks, streamHeightChunks })`
+  - `render({ loadedChunkCount, loadedBounds, cameraChunk, viewportChunksDrawn })`
+
+## App Composition Layer
+
+### `apps/game/gameApp.js`
+
+Composition responsibilities:
+
+- instantiate all world modules,
+- coordinate render cycle,
+- connect resize/input events to runtime systems.
+
+### `apps/debug/debugApp.js`
+
+Debug responsibilities:
+
+- render diagnostic generation views,
+- expose chunk reports and validation summaries,
+- visualize tile catalogs/prefabs.

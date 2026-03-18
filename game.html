@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Un-Dead Hotel Game Runtime</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="game-runtime-page">
+  <main class="game-runtime-main">
+    <header class="game-runtime-header">
+      <h1>Un-Dead Hotel Runtime Prototype</h1>
+      <a class="nav-link" href="index.html">Open Debug</a>
+    </header>
+    <p id="game-meta"></p>
+    <canvas id="game-canvas" aria-label="Game runtime world canvas"></canvas>
+    <p class="game-runtime-help">
+      Controls: Arrow keys or WASD to pan camera. The app preloads 20x20 chunks and streams more as you move.
+    </p>
+  </main>
+  <script type="module" src="apps/game/gameApp.js"></script>
+</body>
+</html>

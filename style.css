@@ -21,6 +21,10 @@ h1 {
 
 .top-controls {
   margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 #open-world-preview,
@@ -35,8 +39,21 @@ h1 {
   cursor: pointer;
 }
 
+.nav-link {
+  display: inline-block;
+  text-decoration: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 6px 10px;
+  border: 1px solid #777777;
+  background: #f5f5f5;
+  color: #111111;
+}
+
 #open-world-preview:hover,
-#close-world-preview:hover {
+#close-world-preview:hover,
+.nav-link:hover {
   background: #ebebeb;
 }
 
@@ -220,4 +237,43 @@ h1 {
   border: 1px solid #222222;
   background: #ffffff;
   image-rendering: pixelated;
+}
+
+.game-runtime-page {
+  margin: 0;
+}
+
+.game-runtime-main {
+  padding: 12px;
+}
+
+.game-runtime-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+
+.game-runtime-header h1 {
+  margin: 0;
+}
+
+#game-meta {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+#game-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid #222222;
+  background: #ffffff;
+  image-rendering: pixelated;
+}
+
+.game-runtime-help {
+  margin: 8px 0 0;
+  font-size: 12px;
 }
