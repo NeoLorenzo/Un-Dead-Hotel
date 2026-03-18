@@ -16,6 +16,7 @@ export function createRuntimeHud({
     loadedBounds,
     cameraChunk,
     viewportChunksDrawn,
+    zoomTilePixels,
   }) {
     if (!element) {
       return;
@@ -23,11 +24,14 @@ export function createRuntimeHud({
 
     const loadedWidth = loadedSpan(loadedBounds.minX, loadedBounds.maxX);
     const loadedHeight = loadedSpan(loadedBounds.minY, loadedBounds.maxY);
+    const zoomLabel =
+      typeof zoomTilePixels === "number" ? zoomTilePixels.toFixed(2) : "n/a";
 
     element.textContent =
       `Seed: ${seed} | Loaded chunks: ${loadedChunkCount} | Active stream window: ${streamWidthChunks}x${streamHeightChunks} | ` +
       `Loaded bounds: (${loadedBounds.minX},${loadedBounds.minY}) -> (${loadedBounds.maxX},${loadedBounds.maxY}) [${loadedWidth}x${loadedHeight}] | ` +
-      `Viewport chunks drawn: ${viewportChunksDrawn} | Camera chunk: (${cameraChunk.x},${cameraChunk.y})`;
+      `Viewport chunks drawn: ${viewportChunksDrawn} | Camera chunk: (${cameraChunk.x},${cameraChunk.y}) | ` +
+      `Zoom(tile px): ${zoomLabel}`;
   }
 
   return {
