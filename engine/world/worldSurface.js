@@ -20,11 +20,8 @@ export function createWorldSurface({
     roomDoor,
   } = tileTypes;
   const chunkRenderCache = new Map();
-  let currentTilePixels = Math.max(1, Math.round(tilePixels));
-
-  function clearChunkRenderCache() {
-    chunkRenderCache.clear();
-  }
+  let currentTilePixels = Math.max(1, tilePixels);
+  const MAX_SPRITE_REBUILDS_PER_RENDER = 8;
 
   function resizeToWindow({
     margin = 24,
@@ -40,8 +37,16 @@ export function createWorldSurface({
     };
   }
 
-  function drawThinExteriorWallsForRooms(targetCtx, originX, originY, rooms, tileMap, mapWidth) {
-    const thickness = Math.max(1, Math.round(currentTilePixels * roomThinWallRatio));
+  function drawThinExteriorWallsForRooms(
+    targetCtx,
+    originX,
+    originY,
+    rooms,
+    tileMap,
+    mapWidth,
+    tilePixel = currentTilePixels
+  ) {
+    const thickness = Math.max(1, Math.round(tilePixel * roomThinWallRatio));
     targetCtx.fillStyle = "#8f8f8f";
 
     for (const room of rooms) {
@@ -54,9 +59,9 @@ export function createWorldSurface({
         const topIdx = yMin * mapWidth + x;
         if (tileMap[topIdx] === roomWall && tileMap[topIdx] !== roomDoor) {
           targetCtx.fillRect(
-            originX + x * currentTilePixels,
-            originY + yMin * currentTilePixels,
-            currentTilePixels,
+            originX + x * tilePixel,
+            originY + yMin * tilePixel,
+            tilePixel,
             thickness
           );
         }
@@ -64,9 +69,9 @@ export function createWorldSurface({
         const bottomIdx = yMax * mapWidth + x;
         if (tileMap[bottomIdx] === roomWall && tileMap[bottomIdx] !== roomDoor) {
           targetCtx.fillRect(
-            originX + x * currentTilePixels,
-            originY + (yMax + 1) * currentTilePixels - thickness,
-            currentTilePixels,
+            originX + x * tilePixel,
+            originY + (yMax + 1) * tilePixel - thickness,
+            tilePixel,
             thickness
           );
         }
@@ -76,20 +81,20 @@ export function createWorldSurface({
         const leftIdx = y * mapWidth + xMin;
         if (tileMap[leftIdx] === roomWall && tileMap[leftIdx] !== roomDoor) {
           targetCtx.fillRect(
-            originX + xMin * currentTilePixels,
-            originY + y * currentTilePixels,
+            originX + xMin * tilePixel,
+            originY + y * tilePixel,
             thickness,
-            currentTilePixels
+            tilePixel
           );
         }
 
         const rightIdx = y * mapWidth + xMax;
         if (tileMap[rightIdx] === roomWall && tileMap[rightIdx] !== roomDoor) {
           targetCtx.fillRect(
-            originX + (xMax + 1) * currentTilePixels - thickness,
-            originY + y * currentTilePixels,
+            originX + (xMax + 1) * tilePixel - thickness,
+            originY + y * tilePixel,
             thickness,
-            currentTilePixels
+            tilePixel
           );
         }
       }
@@ -120,6 +125,7 @@ export function createWorldSurface({
     const sprite = document.createElement("canvas");
     sprite.width = Math.max(1, Math.round(chunkSize * currentTilePixels));
     sprite.height = Math.max(1, Math.round(chunkSize * currentTilePixels));
+    const spriteTilePixels = sprite.width / chunkSize;
 
     const spriteCtx = sprite.getContext("2d");
     if (!spriteCtx) {
@@ -133,16 +139,24 @@ export function createWorldSurface({
       for (let x = 0; x < chunkSize; x += 1) {
         spriteCtx.fillStyle = tileColor(tileMap[y * chunkSize + x]);
         spriteCtx.fillRect(
-          x * currentTilePixels,
-          y * currentTilePixels,
-          currentTilePixels,
-          currentTilePixels
+          x * spriteTilePixels,
+          y * spriteTilePixels,
+          spriteTilePixels,
+          spriteTilePixels
         );
       }
     }
 
     if (chunk.rooms && chunk.rooms.length > 0) {
-      drawThinExteriorWallsForRooms(spriteCtx, 0, 0, chunk.rooms, tileMap, chunkSize);
+      drawThinExteriorWallsForRooms(
+        spriteCtx,
+        0,
+        0,
+        chunk.rooms,
+        tileMap,
+        chunkSize,
+        spriteTilePixels
+      );
     }
 
     return sprite;
@@ -182,18 +196,38 @@ export function createWorldSurface({
 
     const bounds = getViewportChunkBounds(cameraTileX, cameraTileY);
     let drawnChunks = 0;
+    let pendingChunkSprites = 0;
+    let spriteRebuildBudget = MAX_SPRITE_REBUILDS_PER_RENDER;
+    const expectedSpritePixels = Math.max(1, Math.round(chunkSize * currentTilePixels));
 
     for (let chunkY = bounds.minChunkY; chunkY <= bounds.maxChunkY; chunkY += 1) {
       for (let chunkX = bounds.minChunkX; chunkX <= bounds.maxChunkX; chunkX += 1) {
         const chunk = ensureChunk(chunkX, chunkY);
         const worldX = chunkX * chunkSize;
         const worldY = chunkY * chunkSize;
+        const chunkKey = `${chunkX},${chunkY}`;
+        let chunkSprite = chunkRenderCache.get(chunkKey);
+        const spriteMatchesScale =
+          !!chunkSprite &&
+          chunkSprite.width === expectedSpritePixels &&
+          chunkSprite.height === expectedSpritePixels;
+
+        if (!spriteMatchesScale) {
+          if (!chunkSprite || spriteRebuildBudget > 0) {
+            chunkSprite = buildChunkSprite(chunk);
+            chunkRenderCache.set(chunkKey, chunkSprite);
+            if (spriteRebuildBudget > 0) {
+              spriteRebuildBudget -= 1;
+            }
+          } else {
+            pendingChunkSprites += 1;
+          }
+        }
 
         const screenX = Math.round((worldX - cameraTileX) * currentTilePixels + canvas.width / 2);
         const screenY = Math.round((worldY - cameraTileY) * currentTilePixels + canvas.height / 2);
-
-        const chunkSprite = getChunkSprite(chunkX, chunkY, chunk);
-        ctx.drawImage(chunkSprite, screenX, screenY);
+        const destPixels = chunkSize * currentTilePixels;
+        ctx.drawImage(chunkSprite, screenX, screenY, destPixels, destPixels);
         drawnChunks += 1;
       }
     }
@@ -201,6 +235,7 @@ export function createWorldSurface({
     return {
       bounds,
       drawnChunks,
+      pendingChunkSprites,
       width: canvas.width,
       height: canvas.height,
     };
@@ -211,12 +246,11 @@ export function createWorldSurface({
   }
 
   function setTilePixels(nextTilePixels) {
-    const rounded = Math.max(1, Math.round(nextTilePixels));
-    if (rounded === currentTilePixels) {
+    const normalized = Math.max(1, nextTilePixels);
+    if (Math.abs(normalized - currentTilePixels) < 0.0001) {
       return false;
     }
-    currentTilePixels = rounded;
-    clearChunkRenderCache();
+    currentTilePixels = normalized;
     return true;
   }
 

@@ -8,16 +8,16 @@ export function createKeyboardPanInput({
   let lastTimestamp = null;
 
   function directionForKey(key) {
-    if (key === "ArrowUp" || key === "w" || key === "W") {
+    if (key === "w" || key === "W") {
       return { x: 0, y: -1 };
     }
-    if (key === "ArrowDown" || key === "s" || key === "S") {
+    if (key === "s" || key === "S") {
       return { x: 0, y: 1 };
     }
-    if (key === "ArrowLeft" || key === "a" || key === "A") {
+    if (key === "a" || key === "A") {
       return { x: -1, y: 0 };
     }
-    if (key === "ArrowRight" || key === "d" || key === "D") {
+    if (key === "d" || key === "D") {
       return { x: 1, y: 0 };
     }
     return null;
@@ -119,33 +119,25 @@ export function createZoomInput({
   zoomStep = 1,
 } = {}) {
   function handleWheel(event) {
-    if (event.deltaY < 0) {
-      onZoom({ delta: zoomStep, source: "wheel" });
-    } else if (event.deltaY > 0) {
-      onZoom({ delta: -zoomStep, source: "wheel" });
+    let deltaScale = 1 / 100;
+    if (event.deltaMode === 1) {
+      deltaScale = 1 / 3;
+    } else if (event.deltaMode === 2) {
+      deltaScale = 1;
+    }
+    const delta = -event.deltaY * deltaScale * zoomStep;
+    const clamped = Math.max(-4, Math.min(4, delta));
+    if (Math.abs(clamped) > 0.0001) {
+      onZoom({ delta: clamped, source: "wheel" });
     }
     event.preventDefault();
   }
 
-  function handleKeydown(event) {
-    if (event.key === "=" || event.key === "+") {
-      onZoom({ delta: zoomStep, source: "key" });
-      event.preventDefault();
-      return;
-    }
-    if (event.key === "-" || event.key === "_") {
-      onZoom({ delta: -zoomStep, source: "key" });
-      event.preventDefault();
-    }
-  }
-
   function start() {
-    target.addEventListener("keydown", handleKeydown);
     wheelTarget.addEventListener("wheel", handleWheel, { passive: false });
   }
 
   function stop() {
-    target.removeEventListener("keydown", handleKeydown);
     wheelTarget.removeEventListener("wheel", handleWheel);
   }
 

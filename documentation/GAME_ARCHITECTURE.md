@@ -6,25 +6,33 @@ The current architecture is organized around strict separation of concerns:
 
 - generation logic in engine modules,
 - runtime orchestration in app entry modules,
-- debug and game runtime as separate consumers of shared generation systems.
+- multiple runtime frontends (Phaser default, canvas fallback, debug fallback) as separate consumers of shared generation systems.
 
 ## Runtime Entrypoints
 
-### Debug Runtime
+### Default Runtime (Phaser)
 
-- Entry chain: `index.html` -> `main.js` -> `apps/debug/debugApp.js`
+- Entry chain: `index.html` -> `apps/phaser/phaserApp.js`
 - Purpose:
-  - inspect and validate generation behavior,
-  - render 6x6 and 20x20 debug views,
-  - expose generation diagnostics.
+  - run streamed world rendering with Phaser,
+  - provide smooth camera/input controls,
+  - use engine systems through the Phaser adapter boundary.
 
-### Game Runtime
+### Canvas Fallback Runtime
 
 - Entry chain: `game.html` -> `apps/game/gameApp.js`
 - Purpose:
   - run streamed world rendering,
   - preload 20x20 startup window,
   - generate additional chunks on demand as camera moves.
+
+### Debug Fallback Runtime
+
+- Entry chain: `debug.html` -> `main.js` -> `apps/debug/debugApp.js`
+- Purpose:
+  - inspect and validate generation behavior,
+  - render 6x6 and 20x20 debug views,
+  - expose generation diagnostics.
 
 ## Module Topology
 
@@ -80,10 +88,10 @@ The current architecture is organized around strict separation of concerns:
 
 ## Data Flow (Game Runtime)
 
-1. `gameApp` builds runtime modules (`worldStore`, `worldSurface`, `cameraController`, `inputController`, `runtimeHud`).
+1. Runtime app (`apps/phaser/phaserApp.js` or `apps/game/gameApp.js`) builds runtime modules (`worldStore`, renderer, `cameraController`, input, `runtimeHud`).
 2. Camera chunk coordinate is computed from camera tile position.
 3. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
-4. `worldSurface.render(...)` requests visible chunks via `ensureChunk(...)` callback.
+4. Renderer requests visible chunks via `ensureChunk(...)` callback.
 5. `runtimeHud.render(...)` presents runtime state metrics.
 
 ## Why This Is "Proper" Relative To Previous State

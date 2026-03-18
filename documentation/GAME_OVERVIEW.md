@@ -13,12 +13,13 @@ The game mixes:
 
 ## Current Build Status
 
-The codebase currently provides two runtime modes:
+The codebase currently provides three runtime routes:
 
-- `index.html`: procedural generation debug mode
-- `game.html`: game runtime prototype mode
+- `index.html`: default Phaser runtime
+- `game.html`: canvas runtime fallback
+- `debug.html`: procedural generation debug mode
 
-The procedural generation system is deterministic by chunk coordinate and world seed and is shared by both modes.
+The procedural generation system is deterministic by chunk coordinate and world seed and is shared by all runtime routes.
 
 ## Core Setting
 

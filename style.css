@@ -273,6 +273,22 @@ h1 {
   image-rendering: pixelated;
 }
 
+#phaser-game-root {
+  display: block;
+  width: 100%;
+  min-height: 420px;
+  border: 1px solid #222222;
+  background: #101015;
+  overflow: hidden;
+}
+
+#phaser-game-root canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+}
+
 .game-runtime-help {
   margin: 8px 0 0;
   font-size: 12px;

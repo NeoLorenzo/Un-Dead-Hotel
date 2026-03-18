@@ -2,6 +2,10 @@
 
 This document summarizes the primary runtime-facing APIs in the current architecture.
 
+Canonical contract details now live in:
+
+- `ENGINE_RUNTIME_CONTRACTS.md` (contract version `v1`, frozen March 18, 2026)
+
 ## Generation Layer
 
 ### `engine/generation/chunkGenerator.js`
@@ -45,6 +49,8 @@ Returned API:
 - `resizeToWindow(options?)` -> sets canvas pixel size
 - `render({ cameraTileX, cameraTileY, ensureChunk })` -> draws frame
 - `getViewportChunkBounds(cameraTileX, cameraTileY)`
+- `getTilePixels()`
+- `setTilePixels(nextTilePixels)` -> `boolean` changed
 
 ### `engine/world/cameraController.js`
 
@@ -57,14 +63,17 @@ Returned API:
 
 ### `engine/world/inputController.js`
 
-- `createKeyboardPanInput({ stepTiles, onMove, target? })`
+- `createKeyboardPanInput({ speedTilesPerSecond, onMove, target? })`
+  - `start()`
+  - `stop()`
+- `createZoomInput({ onZoom, target?, wheelTarget?, zoomStep? })`
   - `start()`
   - `stop()`
 
 ### `engine/world/runtimeHud.js`
 
 - `createRuntimeHud({ element, seed, streamWidthChunks, streamHeightChunks })`
-  - `render({ loadedChunkCount, loadedBounds, cameraChunk, viewportChunksDrawn })`
+  - `render({ loadedChunkCount, loadedBounds, cameraChunk, viewportChunksDrawn, zoomTilePixels })`
 
 ## App Composition Layer
 
@@ -75,6 +84,11 @@ Composition responsibilities:
 - instantiate all world modules,
 - coordinate render cycle,
 - connect resize/input events to runtime systems.
+
+Current runtime control policy:
+
+- pan: `WASD`
+- zoom: mouse wheel
 
 ### `apps/debug/debugApp.js`
 

@@ -15,10 +15,10 @@ import { createWorldSurface } from "../../engine/world/worldSurface.js";
 
 const STREAM_WIDTH_CHUNKS = 20;
 const STREAM_HEIGHT_CHUNKS = 20;
-const START_TILE_PIXELS = 2;
+const START_TILE_PIXELS = 5;
 const MAX_ZOOM_OUT_TILE_PIXELS = START_TILE_PIXELS;
 const MAX_ZOOM_IN_TILE_PIXELS = 100;
-const BASE_ZOOM_STEP = 1;
+const BASE_ZOOM_STEP = 0.2;
 const MIN_ZOOM_SENSITIVITY = 0.55;
 const MAX_ZOOM_SENSITIVITY = 2.6;
 const ZOOM_SENSITIVITY_CURVE_POWER = 0.6;
@@ -29,7 +29,6 @@ const PAN_SPEED_MULTIPLIER_AT_HALF_ZOOM = 0.5;
 const PAN_SPEED_MULTIPLIER_AT_MAX_ZOOM_IN = 0.2;
 const PAN_SPEED_ZOOM_CURVE_POWER = 0.85;
 const ROOM_THIN_WALL_RATIO = 0.2;
-let zoomStepAccumulator = 0;
 
 function zoomSensitivity(tilePixels) {
   const range = MAX_ZOOM_IN_TILE_PIXELS - START_TILE_PIXELS;
@@ -107,7 +106,7 @@ const keyboardInput = createKeyboardPanInput({
   onMove: (move) => {
     const multiplier = panSpeedMultiplier(worldSurface.getTilePixels());
     camera.moveBy(move.dx * multiplier, move.dy * multiplier);
-    render();
+    scheduleRender();
   },
 });
 const zoomInput = createZoomInput({
@@ -116,29 +115,16 @@ const zoomInput = createZoomInput({
   onZoom: ({ delta }) => {
     const current = worldSurface.getTilePixels();
     const sensitivity = zoomSensitivity(current);
-    zoomStepAccumulator += delta * BASE_ZOOM_STEP * sensitivity;
-
-    const wholeSteps = zoomStepAccumulator > 0
-      ? Math.floor(zoomStepAccumulator)
-      : Math.ceil(zoomStepAccumulator);
-    if (wholeSteps === 0) {
-      return;
-    }
-    zoomStepAccumulator -= wholeSteps;
-
-    const proposed = current + wholeSteps;
+    const proposed = current + delta * BASE_ZOOM_STEP * sensitivity;
     const next = Math.max(
       MAX_ZOOM_OUT_TILE_PIXELS,
       Math.min(MAX_ZOOM_IN_TILE_PIXELS, proposed)
     );
     if (Math.abs(next - current) < 0.0001) {
-      if (next === MAX_ZOOM_OUT_TILE_PIXELS || next === MAX_ZOOM_IN_TILE_PIXELS) {
-        zoomStepAccumulator = 0;
-      }
       return;
     }
     worldSurface.setTilePixels(next);
-    render();
+    scheduleRender();
   },
 });
 const runtimeHud = createRuntimeHud({
@@ -148,6 +134,7 @@ const runtimeHud = createRuntimeHud({
   streamHeightChunks: STREAM_HEIGHT_CHUNKS,
 });
 let lastStreamCenterChunk = null;
+let renderRafId = null;
 
 function resizeCanvas() {
   worldSurface.resizeToWindow({
@@ -158,7 +145,7 @@ function resizeCanvas() {
   });
 }
 
-function render() {
+function renderNow() {
   const cameraChunk = camera.getChunkPosition();
   const streamCenterChanged =
     !lastStreamCenterChunk ||
@@ -184,11 +171,25 @@ function render() {
     viewportChunksDrawn: frame.drawnChunks,
     zoomTilePixels: worldSurface.getTilePixels(),
   });
+
+  if (frame.pendingChunkSprites > 0) {
+    scheduleRender();
+  }
+}
+
+function scheduleRender() {
+  if (renderRafId !== null) {
+    return;
+  }
+  renderRafId = requestAnimationFrame(() => {
+    renderRafId = null;
+    renderNow();
+  });
 }
 
 window.addEventListener("resize", () => {
   resizeCanvas();
-  render();
+  scheduleRender();
 });
 keyboardInput.start();
 zoomInput.start();
@@ -196,4 +197,4 @@ zoomInput.start();
 resizeCanvas();
 worldStore.ensureWindow(0, 0, STREAM_WIDTH_CHUNKS, STREAM_HEIGHT_CHUNKS);
 lastStreamCenterChunk = { x: 0, y: 0 };
-render();
+renderNow();
