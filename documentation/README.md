@@ -16,10 +16,10 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
   - Practical API contracts for generation/world/app modules.
 - `ENGINE_RUNTIME_CONTRACTS.md`
   - Frozen runtime-facing contract boundary for Phaser-first migration Phase 1.
-- `PHASER_FIRST_IMPLEMENTATION_PLAN.md`
-  - End-to-end Phaser-first migration phases and completion tracking.
 - `PHASER_ADAPTER_API.md`
   - Phase 3 adapter contract between Phaser scene runtime and engine systems.
+- `FIRST_HUMAN_IMPLEMENTATION_PLAN.md`
+  - Phase-by-phase implementation/spec tracker for first controllable human slice.
 
 ## Current Runtime Entrypoints
 

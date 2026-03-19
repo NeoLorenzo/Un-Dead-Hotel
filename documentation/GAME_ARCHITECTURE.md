@@ -86,13 +86,40 @@ The current architecture is organized around strict separation of concerns:
 - `apps/game/gameApp.js`
   - composition root for game runtime modules.
 
+### Phaser Human Runtime Modules (Implemented March 19, 2026)
+
+- `apps/phaser/phaserApp.js`
+  - Phaser scene runtime composition/orchestration root.
+- `apps/phaser/phaserRuntimeAdapter.js`
+  - adapter boundary for world tile query and walkability access.
+- `engine/world/aStarPathfinder.js`
+  - framework-agnostic A* pathfinding utility.
+- `apps/phaser/human/humanController.js`
+  - human state, movement, collider integration, and selection state.
+- `apps/phaser/human/humanSelectionController.js`
+  - click and drag-box selection input handling.
+- `apps/phaser/human/humanCommandController.js`
+  - `Ctrl + Left Click` move command orchestration.
+- `apps/phaser/debug/humanDebugOverlay.js`
+  - debug mode rendering for path, collider, and blocked obstacle highlighting.
+
+Dependency direction for this slice:
+
+1. `phaserApp.js` composes controller modules.
+2. Controllers depend on adapter/pathfinder interfaces.
+3. Adapter owns concrete world-store access.
+4. Engine pathfinder remains Phaser-independent.
+5. Debug overlay consumes controller debug state and adapter tile iteration only.
+
 ## Data Flow (Game Runtime)
 
-1. Runtime app (`apps/phaser/phaserApp.js` or `apps/game/gameApp.js`) builds runtime modules (`worldStore`, renderer, `cameraController`, input, `runtimeHud`).
-2. Camera chunk coordinate is computed from camera tile position.
-3. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
-4. Renderer requests visible chunks via `ensureChunk(...)` callback.
-5. `runtimeHud.render(...)` presents runtime state metrics.
+1. Runtime app (`apps/phaser/phaserApp.js` or `apps/game/gameApp.js`) builds runtime modules.
+2. Phaser path composes adapter + human controllers + debug overlay through explicit interfaces.
+3. Camera chunk coordinate is computed from camera tile position.
+4. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
+5. Renderer requests visible chunks via `ensureChunk(...)` callback.
+6. Human command flow issues A* path requests via engine pathfinder and applies path to human controller.
+7. `runtimeHud.render(...)` presents runtime state metrics.
 
 ## Why This Is "Proper" Relative To Previous State
 
@@ -109,5 +136,6 @@ Recommended next extension pattern:
 
 1. Add new behavior in `engine/world/*` or `engine/generation/*` modules.
 2. Expose minimal, explicit APIs.
-3. Keep `apps/game/gameApp.js` as composition only.
-4. Keep debug logic isolated in `apps/debug/debugApp.js`.
+3. Keep `apps/phaser/phaserApp.js` and `apps/game/gameApp.js` as composition roots.
+4. Keep gameplay behavior in focused controllers (`apps/phaser/human/*`, `apps/phaser/debug/*`).
+5. Keep debug logic isolated from core movement/pathfinding modules.

@@ -6,26 +6,35 @@ import {
   TILE_ROOM_FLOOR,
   TILE_ROOM_WALL,
 } from "../../engine/generation/chunkGenerator.js";
+import { createSubTilePathfinder } from "../../engine/world/subTilePathfinder.js";
 import { createRuntimeHud } from "../../engine/world/runtimeHud.js";
 import { createPhaserRuntimeAdapter } from "./phaserRuntimeAdapter.js";
+import { createHumanDebugOverlay } from "./debug/humanDebugOverlay.js";
+import { createHumanController } from "./human/humanController.js";
+import { createHumanCommandController } from "./human/humanCommandController.js";
+import { createHumanSelectionController } from "./human/humanSelectionController.js";
 
 const GAME_WIDTH = 1280;
 const GAME_HEIGHT = 720;
 const START_TILE_PIXELS = 5;
 const MIN_TILE_PIXELS = START_TILE_PIXELS;
-const MAX_TILE_PIXELS = 24;
+const MAX_TILE_PIXELS = 60;
 const CAMERA_PAN_TILES_PER_SECOND = 42;
 const PAN_ACCEL_TILES_PER_SECOND_SQUARED = 280;
 const PAN_DECEL_TILES_PER_SECOND_SQUARED = 320;
 const STREAM_WIDTH_CHUNKS = 20;
 const STREAM_HEIGHT_CHUNKS = 20;
 const BASE_ZOOM_STEP = 0.2;
-const MIN_ZOOM_SENSITIVITY = 0.55;
-const MAX_ZOOM_SENSITIVITY = 2.6;
+const MIN_ZOOM_SENSITIVITY = 1.0;
+const MAX_ZOOM_SENSITIVITY = 50.0;
 const ZOOM_SENSITIVITY_CURVE_POWER = 0.6;
 const ZOOM_LERP_SPEED_PER_SECOND = 18;
 const MAX_CHUNK_TEXTURE_REBUILDS_PER_FRAME = 8;
 const ROOM_THIN_WALL_RATIO = 0.2;
+const HUMAN_MOVE_SPEED_TILES_PER_SECOND = 2.4;
+const HUMAN_SPAWN_SEARCH_RADIUS_TILES = 10;
+const HUMAN_COMMAND_MAX_PATH_NODES = 12000;
+const DEBUG_TOGGLE_KEYS = new Set(["`", "~"]);
 
 const TILE_CORRIDOR = 1;
 const TILE_COLOR_CORRIDOR = "#1f1f1f";
@@ -80,6 +89,13 @@ function moveTowards(current, target, maxStep) {
 
 function chunkKey(chunkX, chunkY) {
   return `${chunkX},${chunkY}`;
+}
+
+function screenToWorldTileSpace(screenX, screenY, cameraTile, tilePixels, width, height) {
+  return {
+    x: cameraTile.x + (screenX - width * 0.5) / tilePixels,
+    y: cameraTile.y + (screenY - height * 0.5) / tilePixels,
+  };
 }
 
 function tileColor(tile) {
@@ -208,6 +224,15 @@ function createRuntimeScene(Phaser) {
       this.chunkFallbackGraphics = null;
       this.chunkBorderGraphics = null;
       this.pendingChunkTextures = 0;
+      this.humanController = null;
+      this.humanSelectionController = null;
+      this.humanCommandController = null;
+      this.humanDebugOverlay = null;
+      this.debugOverlayEnabled = false;
+      this.handlePointerDown = null;
+      this.handlePointerMove = null;
+      this.handlePointerUp = null;
+      this.handleDebugKeyDown = null;
     }
 
     create() {
@@ -216,6 +241,73 @@ function createRuntimeScene(Phaser) {
         streamHeightChunks: STREAM_HEIGHT_CHUNKS,
       });
       this.runtime.ensureStreamWindow();
+      this.humanController = createHumanController({
+        scene: this,
+        runtime: this.runtime,
+        moveSpeedTilesPerSecond: HUMAN_MOVE_SPEED_TILES_PER_SECOND,
+        spawnSearchRadiusTiles: HUMAN_SPAWN_SEARCH_RADIUS_TILES,
+      });
+      this.humanSelectionController = createHumanSelectionController({
+        scene: this,
+        humanController: this.humanController,
+      });
+      this.humanCommandController = createHumanCommandController({
+        scene: this,
+        runtime: this.runtime,
+        humanController: this.humanController,
+        pathfinder: createSubTilePathfinder(),
+        maxPathNodes: HUMAN_COMMAND_MAX_PATH_NODES,
+      });
+      this.humanDebugOverlay = createHumanDebugOverlay({
+        scene: this,
+        runtime: this.runtime,
+        humanController: this.humanController,
+        commandController: this.humanCommandController,
+      });
+      this.humanDebugOverlay.setEnabled(this.debugOverlayEnabled);
+      this.humanCommandController.setDebugEnabled(this.debugOverlayEnabled);
+
+      this.handlePointerDown = (pointer) => {
+        if (pointer.button === 0 && pointer.event?.ctrlKey) {
+          pointer.event.preventDefault();
+          const cameraTile = this.runtime.getCameraTilePosition();
+          const world = screenToWorldTileSpace(
+            pointer.x,
+            pointer.y,
+            cameraTile,
+            this.tilePixels,
+            this.scale.width,
+            this.scale.height
+          );
+          const commandResult = this.humanCommandController?.issueMoveCommand(
+            world.x,
+            world.y
+          );
+          if (
+            commandResult &&
+            (commandResult.accepted || commandResult.reason !== "not_selected")
+          ) {
+            this.dirty = true;
+          }
+          return;
+        }
+        if (this.humanSelectionController) {
+          this.humanSelectionController.onPointerDown(pointer);
+        }
+      };
+      this.handlePointerMove = (pointer) => {
+        if (this.humanSelectionController) {
+          this.humanSelectionController.onPointerMove(pointer);
+        }
+      };
+      this.handlePointerUp = (pointer) => {
+        if (this.humanSelectionController) {
+          this.humanSelectionController.onPointerUp(pointer);
+        }
+      };
+      this.input.on("pointerdown", this.handlePointerDown);
+      this.input.on("pointermove", this.handlePointerMove);
+      this.input.on("pointerup", this.handlePointerUp);
 
       this.cameras.main.setBackgroundColor("#101015");
       this.cameras.main.roundPixels = true;
@@ -229,6 +321,22 @@ function createRuntimeScene(Phaser) {
         left: Phaser.Input.Keyboard.KeyCodes.A,
         right: Phaser.Input.Keyboard.KeyCodes.D,
       });
+      this.handleDebugKeyDown = (event) => {
+        const key = event?.key || "";
+        if (!DEBUG_TOGGLE_KEYS.has(key) && event?.code !== "Backquote") {
+          return;
+        }
+        event.preventDefault();
+        this.debugOverlayEnabled = !this.debugOverlayEnabled;
+        if (this.humanDebugOverlay) {
+          this.humanDebugOverlay.setEnabled(this.debugOverlayEnabled);
+        }
+        if (this.humanCommandController) {
+          this.humanCommandController.setDebugEnabled(this.debugOverlayEnabled);
+        }
+        this.dirty = true;
+      };
+      this.input.keyboard.on("keydown", this.handleDebugKeyDown);
 
       this.input.on("wheel", (_pointer, _go, _dx, dy) => {
         const direction = Math.sign(-dy);
@@ -258,6 +366,38 @@ function createRuntimeScene(Phaser) {
           if (this.textures.exists(entry.textureKey)) {
             this.textures.remove(entry.textureKey);
           }
+        }
+        if (this.handlePointerDown) {
+          this.input.off("pointerdown", this.handlePointerDown);
+          this.handlePointerDown = null;
+        }
+        if (this.handlePointerMove) {
+          this.input.off("pointermove", this.handlePointerMove);
+          this.handlePointerMove = null;
+        }
+        if (this.handlePointerUp) {
+          this.input.off("pointerup", this.handlePointerUp);
+          this.handlePointerUp = null;
+        }
+        if (this.handleDebugKeyDown) {
+          this.input.keyboard.off("keydown", this.handleDebugKeyDown);
+          this.handleDebugKeyDown = null;
+        }
+        if (this.humanSelectionController) {
+          this.humanSelectionController.destroy();
+          this.humanSelectionController = null;
+        }
+        if (this.humanCommandController) {
+          this.humanCommandController.destroy();
+          this.humanCommandController = null;
+        }
+        if (this.humanDebugOverlay) {
+          this.humanDebugOverlay.destroy();
+          this.humanDebugOverlay = null;
+        }
+        if (this.humanController) {
+          this.humanController.destroy();
+          this.humanController = null;
         }
         this.chunkImages.clear();
         this.chunkTextures.clear();
@@ -311,6 +451,13 @@ function createRuntimeScene(Phaser) {
 
       if (Math.abs(this.panVelocity.x) > 0.0001 || Math.abs(this.panVelocity.y) > 0.0001) {
         this.runtime.moveCameraBy(this.panVelocity.x * dt, this.panVelocity.y * dt);
+        this.dirty = true;
+      }
+
+      if (this.humanController && this.humanController.update(dt)) {
+        this.dirty = true;
+      }
+      if (this.humanCommandController && this.humanCommandController.update(dt)) {
         this.dirty = true;
       }
 
@@ -456,6 +603,34 @@ function createRuntimeScene(Phaser) {
       this.chunkBorderGraphics.lineTo(width / 2, height / 2 + 12);
       this.chunkBorderGraphics.strokePath();
 
+      if (this.humanController) {
+        this.humanController.syncToView({
+          cameraTile: snapshot.cameraTile,
+          tilePixels: this.tilePixels,
+          viewWidthPx: width,
+          viewHeightPx: height,
+        });
+      }
+      if (this.humanSelectionController) {
+        this.humanSelectionController.updateOverlay();
+      }
+      if (this.humanCommandController) {
+        this.humanCommandController.syncToView({
+          cameraTile: snapshot.cameraTile,
+          tilePixels: this.tilePixels,
+          viewWidthPx: width,
+          viewHeightPx: height,
+        });
+      }
+      if (this.humanDebugOverlay) {
+        this.humanDebugOverlay.renderFrame({
+          cameraTile: snapshot.cameraTile,
+          tilePixels: this.tilePixels,
+          viewWidthPx: width,
+          viewHeightPx: height,
+        });
+      }
+
       this.pendingChunkTextures = pendingChunkTextures;
       if (pendingChunkTextures > 0) {
         this.dirty = true;
@@ -489,6 +664,13 @@ async function bootPhaserRuntime() {
       pixelArt: true,
       backgroundColor: "#101015",
       scene: [RuntimeScene],
+      physics: {
+        default: "arcade",
+        arcade: {
+          gravity: { y: 0 },
+          debug: false,
+        },
+      },
       scale: {
         mode: Phaser.Scale.FIT,
         autoCenter: Phaser.Scale.CENTER_BOTH,

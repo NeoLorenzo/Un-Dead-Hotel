@@ -16,10 +16,14 @@ Both Phaser and canvas runtimes compose world systems without implementing chunk
 ## Startup Sequence
 
 1. Resolve runtime DOM elements.
-2. Create `worldStore`.
-3. Create camera and input controllers.
-4. Create renderer (`worldSurface` for canvas or Phaser scene renderer).
-5. Create `runtimeHud`.
+2. Create Phaser runtime adapter (`createPhaserRuntimeAdapter`).
+3. Create gameplay controllers:
+   - `humanController`
+   - `humanSelectionController`
+   - `humanCommandController`
+   - `humanDebugOverlay`
+4. Register pointer and keyboard handlers.
+5. Create chunk renderer resources and `runtimeHud`.
 6. Ensure `20x20` startup stream window.
 7. Render first frame.
 
@@ -39,12 +43,19 @@ Keyboard/mouse controls in both runtime paths follow the same policy.
 Key mapping:
 
 - WASD
+- Backquote (`\``) toggles human debug overlay mode in Phaser runtime.
 
 Zoom input:
 
 - Mouse wheel
 
 Movement updates camera tile position through `cameraController`.
+
+Human input policy in Phaser runtime:
+
+- Left click: single-select human.
+- Left click + drag: box-select human.
+- `Ctrl + Left Click`: issue move command for selected human.
 
 ## Render Model
 
@@ -62,6 +73,14 @@ Phaser default (`apps/phaser/phaserApp.js`) uses a chunk texture pipeline:
 - rebuilds chunk textures under a per-frame budget,
 - reuses cached chunk textures between frames,
 - draws tile classes and thin room wall overlays with Phaser.
+- syncs human/controller overlays after world chunk draw.
+
+When debug mode is enabled in Phaser runtime:
+
+- applies blackout overlay,
+- highlights blocked (non-walkable) tiles,
+- draws path/visited-node diagnostics,
+- draws human collider boundary.
 
 ## HUD Model
 
@@ -75,6 +94,8 @@ Phaser default (`apps/phaser/phaserApp.js`) uses a chunk texture pipeline:
 - current camera chunk coordinate.
 
 Phaser runtime appends extra renderer diagnostics (pending chunk textures and Phaser version) after the shared HUD content.
+
+Human debug visualization is separate from HUD text and rendered in dedicated overlay layers.
 
 ## Performance Notes
 

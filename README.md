@@ -19,8 +19,8 @@ All project documentation is in the `documentation/` folder.
 - `documentation/GAME_RUNTIME.md`
 - `documentation/MODULE_API_REFERENCE.md`
 - `documentation/ENGINE_RUNTIME_CONTRACTS.md`
-- `documentation/PHASER_FIRST_IMPLEMENTATION_PLAN.md`
 - `documentation/PHASER_ADAPTER_API.md`
+- `documentation/FIRST_HUMAN_IMPLEMENTATION_PLAN.md`
 
 ## Local Run
 

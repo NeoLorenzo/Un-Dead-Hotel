@@ -15,6 +15,11 @@ This keeps Phaser scene code focused on input/render orchestration and keeps det
 - `chunkSize: number`
 - `moveCameraBy(dxTiles, dyTiles) -> { x: number, y: number }`
 - `getCameraTilePosition() -> { x: number, y: number }`
+- `worldToTile(worldX, worldY) -> { x: number, y: number }`
+- `tileToWorldCenter(tileX, tileY) -> { x: number, y: number }`
+- `getTileAtWorld(tileX, tileY) -> number`
+- `isWalkableTile(tileX, tileY) -> boolean`
+- `forEachVisibleTile(viewWidthPx, viewHeightPx, tilePixels, visitFn) -> void`
 - `ensureStreamWindow() -> { x: number, y: number }`
 - `getVisibleChunkBounds(viewWidthPx, viewHeightPx, tilePixels) -> ViewportBounds`
 - `getVisibleChunks(viewWidthPx, viewHeightPx, tilePixels) -> { bounds: ViewportBounds, chunks: ChunkViewModelEntry[] }`
@@ -57,6 +62,9 @@ This keeps Phaser scene code focused on input/render orchestration and keeps det
   - `loadedWidth: number`
   - `loadedHeight: number`
 
+- `forEachVisibleTile visit payload`
+  - `{ tileX: number, tileY: number, tile: number, walkable: boolean }`
+
 ## Contract Guarantees
 
 - Deterministic chunk data is sourced from `engine/world/worldStore.js`.
@@ -64,3 +72,4 @@ This keeps Phaser scene code focused on input/render orchestration and keeps det
 - Scene code does not duplicate generator logic.
 - Adapter is the only Phaser runtime path that touches world/camera engine modules.
 - Stream window loading is idempotent per camera chunk (window refresh happens only when camera chunk center changes).
+- Tile/walkability helpers centralize tile semantics so gameplay/debug modules avoid direct world-store access.

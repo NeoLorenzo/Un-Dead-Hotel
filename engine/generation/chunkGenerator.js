@@ -76,6 +76,11 @@ const ROOM_PREFAB_CATALOG = [
   buildRoomPrefabDefinition("R04", 10, 5),
 ];
 const ROOM_PREFAB_VARIANTS = buildRoomPrefabVariants(ROOM_PREFAB_CATALOG);
+const TILE_CORRIDOR = 1;
+const SPECIAL_TILE_MIN = 2;
+const SPECIAL_TILE_MAX_EXCLUSIVE = SPECIAL_TILE_MIN + SPECIAL_SPACE_DEFS.length;
+const COLLISION_GEOMETRY_VERSION = 1;
+const NAVIGATION_DATA_VERSION = 1;
 
 
 function coordKey(x, y) {
@@ -100,6 +105,374 @@ function seededIndex(mod, ...parts) {
     return 0;
   }
   return hashParts(...parts) % mod;
+}
+
+function isTileWalkableForHumans(tile) {
+  if (tile === TILE_CORRIDOR) {
+    return true;
+  }
+  if (tile === TILE_ROOM_FLOOR || tile === TILE_ROOM_DOOR) {
+    return true;
+  }
+  if (tile >= SPECIAL_TILE_MIN && tile < SPECIAL_TILE_MAX_EXCLUSIVE) {
+    return true;
+  }
+  return false;
+}
+
+function isTileCollisionBlockedForHumans(tile) {
+  return !isTileWalkableForHumans(tile);
+}
+
+function mergeBlockedTilesIntoRects(
+  tileMap,
+  width,
+  height,
+  isBlockedTile = (tile) => isTileCollisionBlockedForHumans(tile)
+) {
+  if (!(tileMap instanceof Uint8Array)) {
+    return [];
+  }
+
+  const visited = new Uint8Array(width * height);
+  const rects = [];
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const startIndex = y * width + x;
+      if (visited[startIndex] === 1 || !isBlockedTile(tileMap[startIndex], x, y)) {
+        continue;
+      }
+
+      let rectWidth = 0;
+      while (x + rectWidth < width) {
+        const idx = y * width + (x + rectWidth);
+        if (visited[idx] === 1 || !isBlockedTile(tileMap[idx], x + rectWidth, y)) {
+          break;
+        }
+        rectWidth += 1;
+      }
+
+      let rectHeight = 0;
+      let canGrow = true;
+      while (y + rectHeight < height && canGrow) {
+        for (let dx = 0; dx < rectWidth; dx += 1) {
+          const idx = (y + rectHeight) * width + (x + dx);
+          if (
+            visited[idx] === 1 ||
+            !isBlockedTile(tileMap[idx], x + dx, y + rectHeight)
+          ) {
+            canGrow = false;
+            break;
+          }
+        }
+        if (canGrow) {
+          rectHeight += 1;
+        }
+      }
+
+      for (let dy = 0; dy < rectHeight; dy += 1) {
+        for (let dx = 0; dx < rectWidth; dx += 1) {
+          visited[(y + dy) * width + (x + dx)] = 1;
+        }
+      }
+
+      rects.push({
+        type: "rect",
+        x,
+        y,
+        w: rectWidth,
+        h: rectHeight,
+        source: "tile-occupancy",
+      });
+    }
+  }
+
+  return rects;
+}
+
+function isRoomWallTile(tileMap, x, y) {
+  if (!(tileMap instanceof Uint8Array)) {
+    return false;
+  }
+  if (x < 0 || y < 0 || x >= CHUNK_SIZE || y >= CHUNK_SIZE) {
+    return false;
+  }
+  return tileMap[y * CHUNK_SIZE + x] === TILE_ROOM_WALL;
+}
+
+function appendHorizontalWallRuns(
+  obstacles,
+  tileMap,
+  y,
+  xMin,
+  xMax,
+  wallY,
+  thickness,
+  roomIndex,
+  side
+) {
+  if (y < 0 || y >= CHUNK_SIZE || xMin > xMax) {
+    return;
+  }
+
+  let runStart = -1;
+  for (let x = xMin; x <= xMax; x += 1) {
+    const isWall = isRoomWallTile(tileMap, x, y);
+    if (isWall && runStart < 0) {
+      runStart = x;
+    }
+
+    const isRunEnd = runStart >= 0 && (!isWall || x === xMax);
+    if (!isRunEnd) {
+      continue;
+    }
+
+    const runEnd = isWall && x === xMax ? x : x - 1;
+    const width = runEnd - runStart + 1;
+    if (width > 0) {
+      obstacles.push({
+        type: "rect",
+        x: runStart,
+        y: wallY,
+        w: width,
+        h: thickness,
+        source: "room-thin-wall",
+        roomIndex,
+        side,
+      });
+    }
+    runStart = -1;
+  }
+}
+
+function appendVerticalWallRuns(
+  obstacles,
+  tileMap,
+  x,
+  yMin,
+  yMax,
+  wallX,
+  thickness,
+  roomIndex,
+  side
+) {
+  if (x < 0 || x >= CHUNK_SIZE || yMin > yMax) {
+    return;
+  }
+
+  let runStart = -1;
+  for (let y = yMin; y <= yMax; y += 1) {
+    const isWall = isRoomWallTile(tileMap, x, y);
+    if (isWall && runStart < 0) {
+      runStart = y;
+    }
+
+    const isRunEnd = runStart >= 0 && (!isWall || y === yMax);
+    if (!isRunEnd) {
+      continue;
+    }
+
+    const runEnd = isWall && y === yMax ? y : y - 1;
+    const height = runEnd - runStart + 1;
+    if (height > 0) {
+      obstacles.push({
+        type: "rect",
+        x: wallX,
+        y: runStart,
+        w: thickness,
+        h: height,
+        source: "room-thin-wall",
+        roomIndex,
+        side,
+      });
+    }
+    runStart = -1;
+  }
+}
+
+function buildRoomThinWallObstacles(tileMap, rooms, thicknessRatio = ROOM_THIN_WALL_RATIO) {
+  if (!(tileMap instanceof Uint8Array) || !Array.isArray(rooms) || rooms.length === 0) {
+    return [];
+  }
+
+  const thickness = Math.max(0.05, Math.min(1, Number(thicknessRatio) || ROOM_THIN_WALL_RATIO));
+  const obstacles = [];
+
+  for (let roomIndex = 0; roomIndex < rooms.length; roomIndex += 1) {
+    const room = rooms[roomIndex];
+    const x = Math.floor(Number(room?.x));
+    const y = Math.floor(Number(room?.y));
+    const w = Math.floor(Number(room?.w));
+    const h = Math.floor(Number(room?.h));
+
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      !Number.isFinite(w) ||
+      !Number.isFinite(h) ||
+      w <= 0 ||
+      h <= 0
+    ) {
+      continue;
+    }
+
+    const xMin = Math.max(0, x);
+    const yMin = Math.max(0, y);
+    const xMax = Math.min(CHUNK_SIZE - 1, x + w - 1);
+    const yMax = Math.min(CHUNK_SIZE - 1, y + h - 1);
+
+    if (xMin > xMax || yMin > yMax) {
+      continue;
+    }
+
+    appendHorizontalWallRuns(
+      obstacles,
+      tileMap,
+      yMin,
+      xMin,
+      xMax,
+      yMin,
+      thickness,
+      roomIndex,
+      "N"
+    );
+    appendHorizontalWallRuns(
+      obstacles,
+      tileMap,
+      yMax,
+      xMin,
+      xMax,
+      yMax + 1 - thickness,
+      thickness,
+      roomIndex,
+      "S"
+    );
+    appendVerticalWallRuns(
+      obstacles,
+      tileMap,
+      xMin,
+      yMin,
+      yMax,
+      xMin,
+      thickness,
+      roomIndex,
+      "W"
+    );
+    appendVerticalWallRuns(
+      obstacles,
+      tileMap,
+      xMax,
+      yMin,
+      yMax,
+      xMax + 1 - thickness,
+      thickness,
+      roomIndex,
+      "E"
+    );
+  }
+
+  return obstacles;
+}
+
+function buildChunkCollisionGeometry(chunkInput, options = {}) {
+  const tileMap =
+    chunkInput instanceof Uint8Array
+      ? chunkInput
+      : chunkInput?.tileMap instanceof Uint8Array
+        ? chunkInput.tileMap
+        : null;
+  const rooms = Array.isArray(chunkInput?.rooms)
+    ? chunkInput.rooms
+    : Array.isArray(options.rooms)
+      ? options.rooms
+      : [];
+
+  if (!(tileMap instanceof Uint8Array)) {
+    return {
+      version: COLLISION_GEOMETRY_VERSION,
+      space: "chunk-local",
+      units: "tiles",
+      obstacles: [],
+      blockedTileCount: 0,
+      blockedAreaTiles: 0,
+      sourceCounts: {
+        roomThinWalls: 0,
+        tileOccupancy: 0,
+      },
+    };
+  }
+
+  const roomThinWallRatio = Number.isFinite(options.roomThinWallRatio)
+    ? options.roomThinWallRatio
+    : ROOM_THIN_WALL_RATIO;
+  const roomThinWallObstacles = buildRoomThinWallObstacles(tileMap, rooms, roomThinWallRatio);
+  const hasThinWallObstacles = roomThinWallObstacles.length > 0;
+  const tileOccupancyObstacles = mergeBlockedTilesIntoRects(
+    tileMap,
+    CHUNK_SIZE,
+    CHUNK_SIZE,
+    (tile) =>
+      isTileCollisionBlockedForHumans(tile) &&
+      (!hasThinWallObstacles || tile !== TILE_ROOM_WALL)
+  );
+  const obstacles = [...roomThinWallObstacles, ...tileOccupancyObstacles];
+  let blockedTileCount = 0;
+  for (const obstacle of tileOccupancyObstacles) {
+    blockedTileCount += obstacle.w * obstacle.h;
+  }
+  let blockedAreaTiles = 0;
+  for (const obstacle of obstacles) {
+    blockedAreaTiles += obstacle.w * obstacle.h;
+  }
+
+  return {
+    version: COLLISION_GEOMETRY_VERSION,
+    space: "chunk-local",
+    units: "tiles",
+    roomThinWallRatio,
+    obstacles,
+    blockedTileCount,
+    blockedAreaTiles,
+    sourceCounts: {
+      roomThinWalls: roomThinWallObstacles.length,
+      tileOccupancy: tileOccupancyObstacles.length,
+    },
+  };
+}
+
+function buildChunkNavigationData(chunkInput) {
+  const tileMap =
+    chunkInput instanceof Uint8Array
+      ? chunkInput
+      : chunkInput?.tileMap instanceof Uint8Array
+        ? chunkInput.tileMap
+        : null;
+  const walkableMask = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+  let walkableTileCount = 0;
+  let blockedTileCount = 0;
+
+  if (tileMap instanceof Uint8Array) {
+    for (let i = 0; i < tileMap.length; i += 1) {
+      if (isTileWalkableForHumans(tileMap[i])) {
+        walkableMask[i] = 1;
+        walkableTileCount += 1;
+      } else {
+        blockedTileCount += 1;
+      }
+    }
+  }
+
+  return {
+    version: NAVIGATION_DATA_VERSION,
+    backend: "tile-grid",
+    gridWidth: CHUNK_SIZE,
+    gridHeight: CHUNK_SIZE,
+    cellSizeTiles: 1,
+    walkableMask,
+    walkableTileCount,
+    blockedTileCount,
+  };
 }
 
 function buildRoomPrefabTileMap(w, h) {
@@ -2334,6 +2707,10 @@ export {
   DISABLED_ACCESS_TILE_KEYS,
   ROOM_PREFAB_CATALOG,
   ROOM_PREFAB_VARIANTS,
+  isTileWalkableForHumans,
+  isTileCollisionBlockedForHumans,
+  buildChunkCollisionGeometry,
+  buildChunkNavigationData,
   coordKey,
   seededIndex,
   buildCorridorTilePatterns,

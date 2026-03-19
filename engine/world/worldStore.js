@@ -1,6 +1,8 @@
 import {
   CARDINAL_NEIGHBORS,
   NEXTGEN_SEED,
+  buildChunkCollisionGeometry,
+  buildChunkNavigationData,
   buildAccessCorridorCatalogue,
   buildCorridorTilePatterns,
   buildForcedCorridorAssignment,
@@ -92,9 +94,13 @@ export function createWorldStore({
     const chunkSpecials = generateChunkSpecialSpaces(assignment.sockets, cx, cy);
     const chunkAccess = placeChunkAccessCorridors(chunkSpecials.tileMap, cx, cy, accessCorridorCatalogue);
     const chunkRooms = generateChunkRooms(chunkAccess.tileMap, cx, cy);
+    const collisionGeometry = buildChunkCollisionGeometry(chunkRooms);
+    const navigationData = buildChunkNavigationData(chunkRooms);
 
     return {
       ...chunkRooms,
+      collisionGeometry,
+      navigationData,
       assignment,
     };
   }
