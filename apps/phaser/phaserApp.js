@@ -33,7 +33,10 @@ const MAX_CHUNK_TEXTURE_REBUILDS_PER_FRAME = 8;
 const ROOM_THIN_WALL_RATIO = 0.2;
 const HUMAN_MOVE_SPEED_TILES_PER_SECOND = 2.4;
 const HUMAN_SPAWN_SEARCH_RADIUS_TILES = 10;
-const HUMAN_COMMAND_MAX_PATH_NODES = 12000;
+const HUMAN_COMMAND_MAX_PATH_NODES = 32000;
+const HUMAN_COMMAND_NAV_PADDING_EXPANSION_FACTORS = [1, 2, 4, 8];
+const HUMAN_COMMAND_MAX_DYNAMIC_EXPANSION_ATTEMPTS = 7;
+const HUMAN_COMMAND_MAX_AUTO_PADDING_TILES = 1536;
 const DEBUG_TOGGLE_KEYS = new Set(["`", "~"]);
 
 const TILE_CORRIDOR = 1;
@@ -257,6 +260,9 @@ function createRuntimeScene(Phaser) {
         humanController: this.humanController,
         pathfinder: createSubTilePathfinder(),
         maxPathNodes: HUMAN_COMMAND_MAX_PATH_NODES,
+        navPaddingExpansionFactors: HUMAN_COMMAND_NAV_PADDING_EXPANSION_FACTORS,
+        maxDynamicExpansionAttempts: HUMAN_COMMAND_MAX_DYNAMIC_EXPANSION_ATTEMPTS,
+        maxAutoPaddingTiles: HUMAN_COMMAND_MAX_AUTO_PADDING_TILES,
       });
       this.humanDebugOverlay = createHumanDebugOverlay({
         scene: this,

@@ -19,7 +19,12 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
 - `PHASER_ADAPTER_API.md`
   - Phase 3 adapter contract between Phaser scene runtime and engine systems.
 - `FIRST_HUMAN_IMPLEMENTATION_PLAN.md`
-  - Phase-by-phase implementation/spec tracker for first controllable human slice.
+  - Archive pointer for the completed first-human implementation plan.
+
+## Archived Documents
+
+- `archive/FIRST_HUMAN_IMPLEMENTATION_PLAN.md`
+  - Completed phase-by-phase implementation/spec tracker for the first controllable human slice.
 
 ## Current Runtime Entrypoints
 

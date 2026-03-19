@@ -91,17 +91,19 @@ The current architecture is organized around strict separation of concerns:
 - `apps/phaser/phaserApp.js`
   - Phaser scene runtime composition/orchestration root.
 - `apps/phaser/phaserRuntimeAdapter.js`
-  - adapter boundary for world tile query and walkability access.
+  - adapter boundary for world tile query, collision geometry, and navigation-grid access.
 - `engine/world/aStarPathfinder.js`
-  - framework-agnostic A* pathfinding utility.
+  - framework-agnostic tile-grid A* utility retained for legacy/debug usage.
+- `engine/world/subTilePathfinder.js`
+  - framework-agnostic sub-tile bidirectional A* pathfinding utility (heap-based frontier).
 - `apps/phaser/human/humanController.js`
   - human state, movement, collider integration, and selection state.
 - `apps/phaser/human/humanSelectionController.js`
   - click and drag-box selection input handling.
 - `apps/phaser/human/humanCommandController.js`
-  - `Ctrl + Left Click` move command orchestration.
+  - `Ctrl + Left Click` world-space move command orchestration with boundary-aware directional nav-window expansion retries.
 - `apps/phaser/debug/humanDebugOverlay.js`
-  - debug mode rendering for path, collider, and blocked obstacle highlighting.
+  - debug mode rendering for path, collider, and geometry obstacle highlighting.
 
 Dependency direction for this slice:
 
@@ -119,6 +121,7 @@ Dependency direction for this slice:
 4. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
 5. Renderer requests visible chunks via `ensureChunk(...)` callback.
 6. Human command flow issues A* path requests via engine pathfinder and applies path to human controller.
+   - Runtime behavior uses sub-tile bidirectional A* and world-space waypoints.
 7. `runtimeHud.render(...)` presents runtime state metrics.
 
 ## Why This Is "Proper" Relative To Previous State

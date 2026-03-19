@@ -55,7 +55,7 @@ Human input policy in Phaser runtime:
 
 - Left click: single-select human.
 - Left click + drag: box-select human.
-- `Ctrl + Left Click`: issue move command for selected human.
+- `Ctrl + Left Click`: issue world-space move command for selected human.
 
 ## Render Model
 
@@ -78,9 +78,19 @@ Phaser default (`apps/phaser/phaserApp.js`) uses a chunk texture pipeline:
 When debug mode is enabled in Phaser runtime:
 
 - applies blackout overlay,
-- highlights blocked (non-walkable) tiles,
+- highlights blocked collision geometry obstacles,
 - draws path/visited-node diagnostics,
 - draws human collider boundary.
+
+## Human Path Command Model (Phaser)
+
+- Command controller resolves nearest navigable world goal from pointer target.
+- Runtime adapter builds an obstacle-inflated sub-tile navigation grid around command bounds.
+- Pathfinding uses engine `subTilePathfinder` bidirectional A* with heap-based frontiers.
+- Pathfinder search stats expose boundary-touch and likely-clipped-domain signals for command retries.
+- Command controller retries with configured expansion factors, then boundary-aware directional nav-window growth when clipped.
+- Current Phaser scene tuning uses bounded caps for performance (`maxPathNodes=32000`, `maxDynamicExpansionAttempts=7`, `maxAutoPaddingTiles=1536`).
+- Human controller follows resulting world-space waypoints and uses geometry collision resolution in motion updates.
 
 ## HUD Model
 

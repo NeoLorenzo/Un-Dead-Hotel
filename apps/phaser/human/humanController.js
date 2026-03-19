@@ -6,8 +6,9 @@ const HUMAN_SELECTION_RING_SCALE = 0.78;
 const HUMAN_SELECTION_RING_COLOR = 0x6bf779;
 const DEFAULT_MOVE_SPEED_TILES_PER_SECOND = 2.3;
 const DEFAULT_SPAWN_SEARCH_RADIUS_TILES = 10;
-const ARRIVAL_THRESHOLD_TILES = 0.06;
+const ARRIVAL_RADIUS_TILES = 0.09;
 const MIN_MOVEMENT_DISTANCE_TILES = 0.001;
+const COLLISION_RESOLVE_STEP_TILES = 0.12;
 
 function clampFinite(value, fallback) {
   if (!Number.isFinite(value)) {
@@ -179,6 +180,14 @@ export function createHumanController({
   }
 
   function isWalkableWorld(worldX, worldY) {
+    if (typeof runtime.isWalkableWorldRect === "function") {
+      return runtime.isWalkableWorldRect(
+        worldX,
+        worldY,
+        HUMAN_COLLIDER_RADIUS_TILES,
+        HUMAN_COLLIDER_RADIUS_TILES
+      );
+    }
     if (typeof runtime.isWalkableWorldPoint === "function") {
       return runtime.isWalkableWorldPoint(worldX, worldY, HUMAN_COLLIDER_RADIUS_TILES);
     }
@@ -240,36 +249,56 @@ export function createHumanController({
   function moveWithCollisionGate(dx, dy) {
     const startX = worldPosition.x;
     const startY = worldPosition.y;
+    if (typeof runtime.resolveWorldRectMovement === "function") {
+      const resolved = runtime.resolveWorldRectMovement({
+        startWorldX: startX,
+        startWorldY: startY,
+        deltaWorldX: dx,
+        deltaWorldY: dy,
+        halfWidthTiles: HUMAN_COLLIDER_RADIUS_TILES,
+        halfHeightTiles: HUMAN_COLLIDER_RADIUS_TILES,
+        stepTiles: COLLISION_RESOLVE_STEP_TILES,
+      });
+      worldPosition.x = resolved.worldX;
+      worldPosition.y = resolved.worldY;
+      return {
+        moved: resolved.moved,
+        dx: worldPosition.x - startX,
+        dy: worldPosition.y - startY,
+      };
+    }
+
     const nextX = startX + dx;
     const nextY = startY + dy;
-    let moved = false;
-
     if (isWalkableWorld(nextX, nextY)) {
       worldPosition.x = nextX;
       worldPosition.y = nextY;
-      moved = true;
-    } else {
-      const xOnlyWalkable = dx !== 0 && isWalkableWorld(startX + dx, startY);
-      const yOnlyWalkable = dy !== 0 && isWalkableWorld(startX, startY + dy);
+      return {
+        moved: true,
+        dx: worldPosition.x - startX,
+        dy: worldPosition.y - startY,
+      };
+    }
 
-      if (xOnlyWalkable && yOnlyWalkable) {
-        if (Math.abs(dx) >= Math.abs(dy)) {
-          worldPosition.x = startX + dx;
-        } else {
-          worldPosition.y = startY + dy;
-        }
-        moved = true;
-      } else if (xOnlyWalkable) {
+    const xOnlyWalkable = dx !== 0 && isWalkableWorld(startX + dx, startY);
+    const yOnlyWalkable = dy !== 0 && isWalkableWorld(startX, startY + dy);
+
+    if (xOnlyWalkable && yOnlyWalkable) {
+      if (Math.abs(dx) >= Math.abs(dy)) {
         worldPosition.x = startX + dx;
-        moved = true;
-      } else if (yOnlyWalkable) {
+      } else {
         worldPosition.y = startY + dy;
-        moved = true;
       }
+    } else if (xOnlyWalkable) {
+      worldPosition.x = startX + dx;
+    } else if (yOnlyWalkable) {
+      worldPosition.y = startY + dy;
     }
 
     return {
-      moved,
+      moved:
+        Math.abs(worldPosition.x - startX) > 0.000001 ||
+        Math.abs(worldPosition.y - startY) > 0.000001,
       dx: worldPosition.x - startX,
       dy: worldPosition.y - startY,
     };
@@ -291,9 +320,7 @@ export function createHumanController({
     const toTargetY = targetWorld.y - worldPosition.y;
     const distance = Math.hypot(toTargetX, toTargetY);
 
-    if (distance <= ARRIVAL_THRESHOLD_TILES) {
-      worldPosition.x = targetWorld.x;
-      worldPosition.y = targetWorld.y;
+    if (distance <= ARRIVAL_RADIUS_TILES) {
       clearVelocity();
       waypointIndex += 1;
       if (waypointIndex >= pathWaypointsWorld.length) {
@@ -313,6 +340,8 @@ export function createHumanController({
       const currentTile = runtime.worldToTile(worldPosition.x, worldPosition.y);
       const blockedTile = runtime.worldToTile(targetWorld.x, targetWorld.y);
       pendingPathBlockedEvent = {
+        fromWorld: { x: worldPosition.x, y: worldPosition.y },
+        blockedTargetWorld: { x: targetWorld.x, y: targetWorld.y },
         fromTile: { x: currentTile.x, y: currentTile.y },
         blockedTile: { x: blockedTile.x, y: blockedTile.y },
       };

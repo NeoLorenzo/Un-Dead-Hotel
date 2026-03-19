@@ -1,4 +1,4 @@
-# Phaser Runtime Adapter API (Phase 3)
+# Phaser Runtime Adapter API
 
 ## Purpose
 
@@ -20,6 +20,14 @@ This keeps Phaser scene code focused on input/render orchestration and keeps det
 - `getTileAtWorld(tileX, tileY) -> number`
 - `isWalkableTile(tileX, tileY) -> boolean`
 - `forEachVisibleTile(viewWidthPx, viewHeightPx, tilePixels, visitFn) -> void`
+- `getChunkCollisionGeometry(chunkX, chunkY) -> ChunkCollisionGeometry`
+- `getChunkNavigationData(chunkX, chunkY) -> ChunkNavigationData`
+- `forEachCollisionObstacleInWorldBounds(minWorldX, minWorldY, maxWorldX, maxWorldY, visitFn) -> void`
+- `forEachVisibleCollisionObstacle(viewWidthPx, viewHeightPx, tilePixels, visitFn) -> void`
+- `isWalkableWorldPoint(worldX, worldY, agentRadiusTiles?) -> boolean`
+- `isWalkableWorldRect(worldX, worldY, halfWidthTiles?, halfHeightTiles?) -> boolean`
+- `resolveWorldRectMovement(params) -> WorldRectMovementResult`
+- `buildSubTileNavigationGrid(params) -> SubTileNavigationGrid`
 - `ensureStreamWindow() -> { x: number, y: number }`
 - `getVisibleChunkBounds(viewWidthPx, viewHeightPx, tilePixels) -> ViewportBounds`
 - `getVisibleChunks(viewWidthPx, viewHeightPx, tilePixels) -> { bounds: ViewportBounds, chunks: ChunkViewModelEntry[] }`
@@ -45,6 +53,8 @@ This keeps Phaser scene code focused on input/render orchestration and keeps det
   - `sockets: { N: boolean, E: boolean, S: boolean, W: boolean }`
   - `tileMap: Uint8Array`
   - `rooms: Array<{ x: number, y: number, w: number, h: number }>`
+  - `collisionGeometry: ChunkCollisionGeometry | null`
+  - `navigationData: ChunkNavigationData | null`
   - `render:`
     - `fillColor: number`
     - `borderColor: number`
@@ -65,6 +75,29 @@ This keeps Phaser scene code focused on input/render orchestration and keeps det
 - `forEachVisibleTile visit payload`
   - `{ tileX: number, tileY: number, tile: number, walkable: boolean }`
 
+- `ChunkCollisionGeometry`
+  - `version: number`
+  - `chunkX: number`
+  - `chunkY: number`
+  - `worldBounds: { x: number, y: number, w: number, h: number }`
+  - `obstacles: Array<{ x: number, y: number, w: number, h: number, source?: string, side?: string | null, roomIndex?: number | null }>`
+
+- `ChunkNavigationData`
+  - `version: number`
+  - `backend: string`
+  - `gridWidth: number`
+  - `gridHeight: number`
+  - `cellSizeTiles: number`
+  - `walkableMask: Uint8Array`
+  - `walkableTileCount: number`
+  - `blockedTileCount: number`
+
+- `WorldRectMovementResult`
+  - `{ worldX, worldY, moved, collided, blockedX, blockedY, appliedDeltaX, appliedDeltaY, steps }`
+
+- `SubTileNavigationGrid`
+  - `{ backend, cellSizeTiles, cols, rows, originWorldX, originWorldY, endWorldX, endWorldY, walkableMask, walkableCount, blockedCount, worldToCell, cellToWorldCenter, isWalkableCell, isWalkableWorld }`
+
 ## Contract Guarantees
 
 - Deterministic chunk data is sourced from `engine/world/worldStore.js`.
@@ -73,3 +106,4 @@ This keeps Phaser scene code focused on input/render orchestration and keeps det
 - Adapter is the only Phaser runtime path that touches world/camera engine modules.
 - Stream window loading is idempotent per camera chunk (window refresh happens only when camera chunk center changes).
 - Tile/walkability helpers centralize tile semantics so gameplay/debug modules avoid direct world-store access.
+- Collision and navigation helpers centralize world-geometry access so gameplay modules avoid direct world-store coupling.

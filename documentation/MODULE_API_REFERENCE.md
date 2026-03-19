@@ -84,6 +84,22 @@ Returned API:
 - `createAStarPathfinder()`
   - returns `{ findPath }`
 
+### `engine/world/subTilePathfinder.js`
+
+- `findPath({ startWorld, goalWorld, navigationGrid, maxNodes?, includeDebug? })`
+  - returns:
+    - `{ status: "found", path: Array<{ x, y }>, searchStats, debug? }`
+    - `{ status: "blocked" | "no_path" | "budget_exceeded", path: [], searchStats, debug? }`
+  - `searchStats` includes:
+    - `expandedCount`, `maxNodes`, `openCount`, `closedCount`
+    - `boundaryHits: { minX, maxX, minY, maxY }`
+    - `touchedBoundary`, `domainClipped`
+  - implementation details:
+    - bidirectional A* (forward/backward search fronts),
+    - heap-based open frontier selection.
+- `createSubTilePathfinder()`
+  - returns `{ findPath }`
+
 ## App Composition Layer
 
 ### `apps/game/gameApp.js`
@@ -114,6 +130,15 @@ Returned API includes:
   - `getTileAtWorld(tileX, tileY)`
   - `isWalkableTile(tileX, tileY)`
   - `forEachVisibleTile(viewWidthPx, viewHeightPx, tilePixels, visitFn)`
+- collision/navigation helpers:
+  - `getChunkCollisionGeometry(chunkX, chunkY)`
+  - `getChunkNavigationData(chunkX, chunkY)`
+  - `forEachCollisionObstacleInWorldBounds(minWorldX, minWorldY, maxWorldX, maxWorldY, visitFn)`
+  - `forEachVisibleCollisionObstacle(viewWidthPx, viewHeightPx, tilePixels, visitFn)`
+  - `isWalkableWorldPoint(worldX, worldY, agentRadiusTiles?)`
+  - `isWalkableWorldRect(worldX, worldY, halfWidthTiles?, halfHeightTiles?)`
+  - `resolveWorldRectMovement({ startWorldX, startWorldY, deltaWorldX, deltaWorldY, halfWidthTiles?, halfHeightTiles?, stepTiles? })`
+  - `buildSubTileNavigationGrid({ minWorldX, minWorldY, maxWorldX, maxWorldY, cellSizeTiles?, agentRadiusTiles? })`
 
 ### `apps/phaser/human/humanController.js`
 
@@ -123,7 +148,8 @@ Returned API includes:
     - `deselect()`
     - `isSelected()`
   - movement/path:
-    - `setPath(pathTiles)`
+    - `setPath(pathTiles, options?)`
+    - `setWorldPath(worldPathPoints)`
     - `clearPath()`
     - `update(dtSeconds)`
   - render/sync:
@@ -138,6 +164,7 @@ Returned API includes:
     - `getCurrentWorldPosition()`
     - `hasActivePath()`
     - `consumePathBlockedEvent()`
+    - `getSpawnTile()`
   - lifecycle:
     - `destroy()`
 
@@ -152,12 +179,12 @@ Returned API includes:
 
 ### `apps/phaser/human/humanCommandController.js`
 
-- `createHumanCommandController({ scene, runtime, humanController, pathfinder, maxPathNodes?, goalSearchRadiusTiles?, maxCommandDistanceTiles? })`
+- `createHumanCommandController({ scene, runtime, humanController, pathfinder, maxPathNodes?, goalSearchRadiusTiles?, maxCommandDistanceTiles?, subTileCellSizeTiles?, navGridPaddingTiles?, navPaddingExpansionFactors?, agentRadiusTiles?, maxDynamicExpansionAttempts?, maxAutoPaddingTiles? })`
   - `issueMoveCommand(pointerWorldX, pointerWorldY)`
   - `update(dtSeconds)`
   - `syncToView({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
   - `setDebugEnabled(enabled)`
-  - `getDebugState()`
+  - `getDebugState()` (includes expansion-attempt summary and per-attempt bounds/boundary metadata)
   - `destroy()`
 
 ### `apps/phaser/debug/humanDebugOverlay.js`

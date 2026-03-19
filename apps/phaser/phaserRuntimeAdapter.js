@@ -13,6 +13,8 @@ const CHUNK_PREVIEW_FILL_COLORS = [
 ];
 const CHUNK_PREVIEW_BORDER_COLOR = 0xb8b8b8;
 const DEFAULT_SUB_TILE_CELL_SIZE_TILES = 0.25;
+const DEFAULT_COLLISION_STEP_TILES = 0.12;
+const COLLISION_EPSILON = 0.000001;
 
 function isFiniteNumber(value) {
   return Number.isFinite(value);
@@ -45,6 +47,15 @@ function pointInsideRect(worldX, worldY, rect) {
     worldX <= rect.x + rect.w &&
     worldY >= rect.y &&
     worldY <= rect.y + rect.h
+  );
+}
+
+function rectsOverlap(rectA, rectB) {
+  return !(
+    rectA.x + rectA.w <= rectB.x + COLLISION_EPSILON ||
+    rectA.x >= rectB.x + rectB.w - COLLISION_EPSILON ||
+    rectA.y + rectA.h <= rectB.y + COLLISION_EPSILON ||
+    rectA.y >= rectB.y + rectB.h - COLLISION_EPSILON
   );
 }
 
@@ -278,35 +289,162 @@ export function createPhaserRuntimeAdapter({
   }
 
   function isWalkableWorldPoint(worldX, worldY, agentRadiusTiles = 0) {
+    return isWalkableWorldRect(worldX, worldY, agentRadiusTiles, agentRadiusTiles);
+  }
+
+  function isWalkableWorldRect(worldX, worldY, halfWidthTiles = 0, halfHeightTiles = halfWidthTiles) {
     if (!isFiniteNumber(worldX) || !isFiniteNumber(worldY)) {
       return false;
     }
 
-    const radius = Math.max(0, Number(agentRadiusTiles) || 0);
+    const halfW = Math.max(0, Number(halfWidthTiles) || 0);
+    const halfH = Math.max(0, Number(halfHeightTiles) || 0);
+    const bounds = {
+      x: worldX - halfW,
+      y: worldY - halfH,
+      w: halfW * 2,
+      h: halfH * 2,
+    };
     let blocked = false;
 
     forEachCollisionObstacleInWorldBounds(
-      worldX - radius,
-      worldY - radius,
-      worldX + radius,
-      worldY + radius,
+      bounds.x,
+      bounds.y,
+      bounds.x + bounds.w,
+      bounds.y + bounds.h,
       (obstacle) => {
         if (blocked) {
           return;
         }
-        const expanded = {
-          x: obstacle.x - radius,
-          y: obstacle.y - radius,
-          w: obstacle.w + radius * 2,
-          h: obstacle.h + radius * 2,
-        };
-        if (pointInsideRect(worldX, worldY, expanded)) {
+        if (
+          !Number.isFinite(obstacle?.x) ||
+          !Number.isFinite(obstacle?.y) ||
+          !Number.isFinite(obstacle?.w) ||
+          !Number.isFinite(obstacle?.h)
+        ) {
+          return;
+        }
+        if (obstacle.w <= 0 || obstacle.h <= 0) {
+          return;
+        }
+        if (rectsOverlap(bounds, obstacle)) {
           blocked = true;
         }
       }
     );
 
     return !blocked;
+  }
+
+  function resolveWorldRectMovement({
+    startWorldX,
+    startWorldY,
+    deltaWorldX,
+    deltaWorldY,
+    halfWidthTiles = 0,
+    halfHeightTiles = halfWidthTiles,
+    stepTiles = DEFAULT_COLLISION_STEP_TILES,
+  } = {}) {
+    const startX = Number(startWorldX) || 0;
+    const startY = Number(startWorldY) || 0;
+    const totalDeltaX = Number(deltaWorldX) || 0;
+    const totalDeltaY = Number(deltaWorldY) || 0;
+    const halfW = Math.max(0, Number(halfWidthTiles) || 0);
+    const halfH = Math.max(0, Number(halfHeightTiles) || 0);
+    const maxStep = Number.isFinite(stepTiles)
+      ? clampNumber(stepTiles, 0.02, 0.5)
+      : DEFAULT_COLLISION_STEP_TILES;
+
+    if (!isWalkableWorldRect(startX, startY, halfW, halfH)) {
+      return {
+        worldX: startX,
+        worldY: startY,
+        moved: false,
+        collided: true,
+        blockedX: totalDeltaX !== 0,
+        blockedY: totalDeltaY !== 0,
+        appliedDeltaX: 0,
+        appliedDeltaY: 0,
+        steps: 0,
+      };
+    }
+
+    const totalDistance = Math.hypot(totalDeltaX, totalDeltaY);
+    const steps = Math.max(1, Math.ceil(totalDistance / maxStep));
+    const stepDeltaX = totalDeltaX / steps;
+    const stepDeltaY = totalDeltaY / steps;
+
+    let worldX = startX;
+    let worldY = startY;
+    let moved = false;
+    let collided = false;
+    let blockedX = false;
+    let blockedY = false;
+
+    for (let i = 0; i < steps; i += 1) {
+      const nextDiagX = worldX + stepDeltaX;
+      const nextDiagY = worldY + stepDeltaY;
+      if (isWalkableWorldRect(nextDiagX, nextDiagY, halfW, halfH)) {
+        worldX = nextDiagX;
+        worldY = nextDiagY;
+        moved =
+          moved ||
+          Math.abs(stepDeltaX) > COLLISION_EPSILON ||
+          Math.abs(stepDeltaY) > COLLISION_EPSILON;
+        continue;
+      }
+
+      collided = true;
+
+      const canMoveX =
+        Math.abs(stepDeltaX) > COLLISION_EPSILON &&
+        isWalkableWorldRect(worldX + stepDeltaX, worldY, halfW, halfH);
+      const canMoveY =
+        Math.abs(stepDeltaY) > COLLISION_EPSILON &&
+        isWalkableWorldRect(worldX, worldY + stepDeltaY, halfW, halfH);
+
+      if (canMoveX && canMoveY) {
+        if (Math.abs(stepDeltaX) >= Math.abs(stepDeltaY)) {
+          worldX += stepDeltaX;
+          blockedY = blockedY || Math.abs(stepDeltaY) > COLLISION_EPSILON;
+        } else {
+          worldY += stepDeltaY;
+          blockedX = blockedX || Math.abs(stepDeltaX) > COLLISION_EPSILON;
+        }
+        moved = true;
+        continue;
+      }
+
+      if (canMoveX) {
+        worldX += stepDeltaX;
+        moved = true;
+        blockedY = blockedY || Math.abs(stepDeltaY) > COLLISION_EPSILON;
+        continue;
+      }
+
+      if (canMoveY) {
+        worldY += stepDeltaY;
+        moved = true;
+        blockedX = blockedX || Math.abs(stepDeltaX) > COLLISION_EPSILON;
+        continue;
+      }
+
+      blockedX = blockedX || Math.abs(stepDeltaX) > COLLISION_EPSILON;
+      blockedY = blockedY || Math.abs(stepDeltaY) > COLLISION_EPSILON;
+      break;
+    }
+
+    return {
+      worldX,
+      worldY,
+      moved,
+      collided,
+      blockedX,
+      blockedY,
+      appliedDeltaX: worldX - startX,
+      appliedDeltaY: worldY - startY,
+      steps,
+    };
   }
 
   function buildSubTileNavigationGrid({
@@ -521,6 +659,8 @@ export function createPhaserRuntimeAdapter({
     forEachCollisionObstacleInWorldBounds,
     forEachVisibleCollisionObstacle,
     isWalkableWorldPoint,
+    isWalkableWorldRect,
+    resolveWorldRectMovement,
     buildSubTileNavigationGrid,
     ensureStreamWindow,
     getVisibleChunkBounds,

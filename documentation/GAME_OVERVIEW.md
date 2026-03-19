@@ -39,9 +39,9 @@ The procedural generation system is deterministic by chunk coordinate and world 
 
 Current Phaser runtime gameplay slice includes:
 
-- one controllable human agent with rigid blocked-tile movement,
+- one controllable human agent with geometry-based world-space movement/collision,
 - left-click and drag-box human selection,
-- `Ctrl + Left Click` path command using 4-direction A*,
+- `Ctrl + Left Click` world-space move command using sub-tile bidirectional A* with boundary-aware directional retry expansion,
 - backquote-toggle debug mode for path/collider/blocked-obstacle visualization.
 
 ## Core Setting

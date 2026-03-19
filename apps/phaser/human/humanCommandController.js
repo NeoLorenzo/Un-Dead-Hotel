@@ -3,7 +3,10 @@ const DEFAULT_GOAL_SEARCH_RADIUS_TILES = 3;
 const DEFAULT_MAX_COMMAND_DISTANCE_TILES = 180;
 const DEFAULT_SUB_TILE_CELL_SIZE_TILES = 0.25;
 const DEFAULT_NAV_GRID_PADDING_TILES = 4;
+const DEFAULT_NAV_PADDING_EXPANSION_FACTORS = [1, 2, 4, 8];
 const DEFAULT_AGENT_RADIUS_TILES = 0.29;
+const DEFAULT_MAX_DYNAMIC_EXPANSION_ATTEMPTS = 12;
+const DEFAULT_MAX_AUTO_PADDING_TILES = 4096;
 const COMMAND_MIN_INTERVAL_SECONDS = 0.06;
 const MARKER_TTL_SECONDS = 0.9;
 const MARKER_GOOD_COLOR = 0x64ff8a;
@@ -141,6 +144,235 @@ function dedupeWorldPath(path) {
   return out;
 }
 
+function normalizePositiveNumberArray(values, fallback) {
+  const source = Array.isArray(values) ? values : fallback;
+  const out = [];
+  const seen = new Set();
+  for (const value of source) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      continue;
+    }
+    const key = numeric.toString();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(numeric);
+  }
+  if (out.length === 0) {
+    return [...fallback];
+  }
+  return out;
+}
+
+function buildConfiguredExpansionAttempts(basePaddingTiles, factors) {
+  const basePadding = Math.max(0, Number(basePaddingTiles) || 0);
+  const normalizedFactors = normalizePositiveNumberArray(
+    factors,
+    DEFAULT_NAV_PADDING_EXPANSION_FACTORS
+  );
+  const attempts = [];
+  const seen = new Set();
+
+  for (const factor of normalizedFactors) {
+    const paddingTiles = basePadding > 0 ? basePadding * factor : factor;
+    if (!Number.isFinite(paddingTiles) || paddingTiles <= 0) {
+      continue;
+    }
+    const key = paddingTiles.toFixed(6);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    attempts.push({
+      mode: "configured",
+      paddingTiles,
+      expansionFactor: factor,
+    });
+  }
+
+  if (attempts.length === 0) {
+    attempts.push({
+      mode: "configured",
+      paddingTiles: basePadding > 0 ? basePadding : 1,
+      expansionFactor: basePadding > 0 ? 1 : null,
+    });
+  }
+
+  return attempts;
+}
+
+function createCorridorBounds(startWorld, goalWorld) {
+  return {
+    minX: Math.min(startWorld.x, goalWorld.x),
+    minY: Math.min(startWorld.y, goalWorld.y),
+    maxX: Math.max(startWorld.x, goalWorld.x),
+    maxY: Math.max(startWorld.y, goalWorld.y),
+  };
+}
+
+function createBoundsFromPadding(corridorBounds, paddingTiles) {
+  const padding = Math.max(0, Number(paddingTiles) || 0);
+  return {
+    minWorldX: corridorBounds.minX - padding,
+    minWorldY: corridorBounds.minY - padding,
+    maxWorldX: corridorBounds.maxX + padding,
+    maxWorldY: corridorBounds.maxY + padding,
+  };
+}
+
+function cloneBounds(bounds) {
+  return {
+    minWorldX: Number(bounds?.minWorldX) || 0,
+    minWorldY: Number(bounds?.minWorldY) || 0,
+    maxWorldX: Number(bounds?.maxWorldX) || 0,
+    maxWorldY: Number(bounds?.maxWorldY) || 0,
+  };
+}
+
+function boundsKey(bounds) {
+  const normalized = cloneBounds(bounds);
+  return [
+    normalized.minWorldX.toFixed(6),
+    normalized.minWorldY.toFixed(6),
+    normalized.maxWorldX.toFixed(6),
+    normalized.maxWorldY.toFixed(6),
+  ].join("|");
+}
+
+function normalizeBoundaryHits(boundaryHits) {
+  if (!boundaryHits) {
+    return null;
+  }
+  const normalized = {
+    minX: boundaryHits.minX === true,
+    maxX: boundaryHits.maxX === true,
+    minY: boundaryHits.minY === true,
+    maxY: boundaryHits.maxY === true,
+  };
+  if (!normalized.minX && !normalized.maxX && !normalized.minY && !normalized.maxY) {
+    return null;
+  }
+  return normalized;
+}
+
+function resolveBoundaryHits(result) {
+  return normalizeBoundaryHits(
+    result?.searchStats?.boundaryHits || result?.debug?.boundaryHits || null
+  );
+}
+
+function computePaddingBySide(bounds, corridorBounds) {
+  const normalizedBounds = cloneBounds(bounds);
+  return {
+    minX: Math.max(0, corridorBounds.minX - normalizedBounds.minWorldX),
+    maxX: Math.max(0, normalizedBounds.maxWorldX - corridorBounds.maxX),
+    minY: Math.max(0, corridorBounds.minY - normalizedBounds.minWorldY),
+    maxY: Math.max(0, normalizedBounds.maxWorldY - corridorBounds.maxY),
+  };
+}
+
+function maxPaddingFromSidePaddings(sidePaddings) {
+  return Math.max(
+    0,
+    Number(sidePaddings?.minX) || 0,
+    Number(sidePaddings?.maxX) || 0,
+    Number(sidePaddings?.minY) || 0,
+    Number(sidePaddings?.maxY) || 0
+  );
+}
+
+function buildDirectionalExpansionAttempt({
+  attempt,
+  corridorBounds,
+  boundaryHits,
+  growStepTiles,
+  maxPaddingTiles,
+}) {
+  const currentBounds = attempt?.bounds ? cloneBounds(attempt.bounds) : null;
+  if (!currentBounds) {
+    return null;
+  }
+
+  const stepTiles = Math.max(1, Number(growStepTiles) || 0);
+  const paddingCap = Math.max(1, Number(maxPaddingTiles) || 1);
+  const normalizedHits = normalizeBoundaryHits(boundaryHits) || {
+    minX: true,
+    maxX: true,
+    minY: true,
+    maxY: true,
+  };
+  const currentSidePaddings = computePaddingBySide(currentBounds, corridorBounds);
+
+  function nextPadding(currentPadding, expandThisSide) {
+    if (!expandThisSide) {
+      return currentPadding;
+    }
+    const additive = currentPadding + stepTiles;
+    const doubled = currentPadding > 0 ? currentPadding * 2 : stepTiles;
+    return Math.min(paddingCap, Math.max(additive, doubled));
+  }
+
+  const nextSidePaddings = {
+    minX: nextPadding(currentSidePaddings.minX, normalizedHits.minX),
+    maxX: nextPadding(currentSidePaddings.maxX, normalizedHits.maxX),
+    minY: nextPadding(currentSidePaddings.minY, normalizedHits.minY),
+    maxY: nextPadding(currentSidePaddings.maxY, normalizedHits.maxY),
+  };
+
+  const noChange =
+    Math.abs(nextSidePaddings.minX - currentSidePaddings.minX) <= 0.000001 &&
+    Math.abs(nextSidePaddings.maxX - currentSidePaddings.maxX) <= 0.000001 &&
+    Math.abs(nextSidePaddings.minY - currentSidePaddings.minY) <= 0.000001 &&
+    Math.abs(nextSidePaddings.maxY - currentSidePaddings.maxY) <= 0.000001;
+  if (noChange) {
+    return null;
+  }
+
+  const nextBounds = {
+    minWorldX: corridorBounds.minX - nextSidePaddings.minX,
+    maxWorldX: corridorBounds.maxX + nextSidePaddings.maxX,
+    minWorldY: corridorBounds.minY - nextSidePaddings.minY,
+    maxWorldY: corridorBounds.maxY + nextSidePaddings.maxY,
+  };
+
+  return {
+    mode: "auto_directional",
+    expansionFactor: null,
+    paddingTiles: maxPaddingFromSidePaddings(nextSidePaddings),
+    bounds: nextBounds,
+    paddedSides: normalizedHits,
+  };
+}
+
+function resultDomainClipped(result) {
+  if (!result) {
+    return false;
+  }
+  if (result.searchStats?.domainClipped === true) {
+    return true;
+  }
+  if (result.debug?.domainClipped === true) {
+    return true;
+  }
+  return false;
+}
+
+function resultTouchedBoundary(result) {
+  if (!result) {
+    return false;
+  }
+  if (result.searchStats?.touchedBoundary === true) {
+    return true;
+  }
+  if (result.debug?.touchedBoundary === true) {
+    return true;
+  }
+  const hits = resolveBoundaryHits(result);
+  return hits !== null;
+}
+
 export function createHumanCommandController({
   scene,
   runtime,
@@ -151,7 +383,10 @@ export function createHumanCommandController({
   maxCommandDistanceTiles = DEFAULT_MAX_COMMAND_DISTANCE_TILES,
   subTileCellSizeTiles = DEFAULT_SUB_TILE_CELL_SIZE_TILES,
   navGridPaddingTiles = DEFAULT_NAV_GRID_PADDING_TILES,
+  navPaddingExpansionFactors = DEFAULT_NAV_PADDING_EXPANSION_FACTORS,
   agentRadiusTiles = DEFAULT_AGENT_RADIUS_TILES,
+  maxDynamicExpansionAttempts = DEFAULT_MAX_DYNAMIC_EXPANSION_ATTEMPTS,
+  maxAutoPaddingTiles = DEFAULT_MAX_AUTO_PADDING_TILES,
 } = {}) {
   if (!scene || !runtime || !humanController || !pathfinder) {
     throw new Error(
@@ -167,6 +402,10 @@ export function createHumanCommandController({
 
   const markerGraphics = scene.add.graphics();
   markerGraphics.setDepth(70);
+  const paddingExpansionFactors = normalizePositiveNumberArray(
+    navPaddingExpansionFactors,
+    DEFAULT_NAV_PADDING_EXPANSION_FACTORS
+  );
 
   let lastGoalWorld = null;
   let repathAttemptUsed = false;
@@ -258,26 +497,121 @@ export function createHumanCommandController({
       };
     }
 
-    const minWorldX = Math.min(startWorld.x, resolvedGoal.world.x) - navGridPaddingTiles;
-    const minWorldY = Math.min(startWorld.y, resolvedGoal.world.y) - navGridPaddingTiles;
-    const maxWorldX = Math.max(startWorld.x, resolvedGoal.world.x) + navGridPaddingTiles;
-    const maxWorldY = Math.max(startWorld.y, resolvedGoal.world.y) + navGridPaddingTiles;
-    const navigationGrid = runtime.buildSubTileNavigationGrid({
-      minWorldX,
-      minWorldY,
-      maxWorldX,
-      maxWorldY,
-      cellSizeTiles: subTileCellSizeTiles,
-      agentRadiusTiles,
-    });
+    const basePaddingTiles = Math.max(0, Number(navGridPaddingTiles) || 0);
+    const corridorBounds = createCorridorBounds(startWorld, resolvedGoal.world);
+    const paddedAttemptQueue = buildConfiguredExpansionAttempts(basePaddingTiles, paddingExpansionFactors)
+      .map((attempt) => ({
+        ...attempt,
+        bounds: createBoundsFromPadding(corridorBounds, attempt.paddingTiles),
+        paddedSides: {
+          minX: true,
+          maxX: true,
+          minY: true,
+          maxY: true,
+        },
+      }));
+    const attemptedBounds = new Set(paddedAttemptQueue.map((attempt) => boundsKey(attempt.bounds)));
+    const maxAutoAttempts = Math.max(0, Math.floor(Number(maxDynamicExpansionAttempts) || 0));
+    const autoPaddingCap = Math.max(1, Number(maxAutoPaddingTiles) || DEFAULT_MAX_AUTO_PADDING_TILES);
 
-    const result = pathfinder.findPath({
-      startWorld,
-      goalWorld: resolvedGoal.world,
-      navigationGrid,
-      maxNodes: maxPathNodes,
-      includeDebug: debugEnabled,
-    });
+    let autoExpansionAttemptsUsed = 0;
+    let selectedResult = null;
+    let selectedGrid = null;
+    let selectedPaddingTiles = paddedAttemptQueue[0]?.paddingTiles || (basePaddingTiles || 1);
+    let selectedExpansionFactor = paddedAttemptQueue[0]?.expansionFactor ?? null;
+    let selectedExpansionMode = paddedAttemptQueue[0]?.mode || "configured";
+    let selectedBounds = paddedAttemptQueue[0]?.bounds ? cloneBounds(paddedAttemptQueue[0].bounds) : null;
+    const expansionAttempts = [];
+
+    for (let attemptIndex = 0; attemptIndex < paddedAttemptQueue.length; attemptIndex += 1) {
+      const attempt = paddedAttemptQueue[attemptIndex];
+      const attemptBounds = attempt.bounds
+        ? cloneBounds(attempt.bounds)
+        : createBoundsFromPadding(corridorBounds, attempt.paddingTiles);
+      const attemptPaddingTiles = Number.isFinite(attempt.paddingTiles)
+        ? Math.max(0, attempt.paddingTiles)
+        : maxPaddingFromSidePaddings(computePaddingBySide(attemptBounds, corridorBounds));
+      const navigationGrid = runtime.buildSubTileNavigationGrid({
+        minWorldX: attemptBounds.minWorldX,
+        minWorldY: attemptBounds.minWorldY,
+        maxWorldX: attemptBounds.maxWorldX,
+        maxWorldY: attemptBounds.maxWorldY,
+        cellSizeTiles: subTileCellSizeTiles,
+        agentRadiusTiles,
+      });
+
+      const result = pathfinder.findPath({
+        startWorld,
+        goalWorld: resolvedGoal.world,
+        navigationGrid,
+        maxNodes: maxPathNodes,
+        includeDebug: debugEnabled,
+      });
+
+      expansionAttempts.push({
+        expansionMode: attempt.mode,
+        expansionFactor: attempt.expansionFactor,
+        paddingTiles: attemptPaddingTiles,
+        status: result.status || "no_path",
+        domainClipped: resultDomainClipped(result),
+        touchedBoundary: result.searchStats?.touchedBoundary === true,
+        boundaryHits: resolveBoundaryHits(result),
+        paddedSides: attempt.paddedSides ? { ...attempt.paddedSides } : null,
+        bounds: cloneBounds(attemptBounds),
+        cols: navigationGrid.cols,
+        rows: navigationGrid.rows,
+        cellCount: navigationGrid.cols * navigationGrid.rows,
+        walkableCount: navigationGrid.walkableCount,
+        blockedCount: navigationGrid.blockedCount,
+      });
+
+      selectedResult = result;
+      selectedGrid = navigationGrid;
+      selectedPaddingTiles = attemptPaddingTiles;
+      selectedExpansionFactor = attempt.expansionFactor ?? null;
+      selectedExpansionMode = attempt.mode;
+      selectedBounds = cloneBounds(attemptBounds);
+
+      if (result.status === "found" && Array.isArray(result.path)) {
+        break;
+      }
+      const shouldAutoExpand =
+        (result.status === "no_path" && resultDomainClipped(result)) ||
+        (result.status === "budget_exceeded" && resultTouchedBoundary(result));
+      if (shouldAutoExpand) {
+        if (autoExpansionAttemptsUsed >= maxAutoAttempts) {
+          if (result.status === "budget_exceeded") {
+            break;
+          }
+          continue;
+        }
+        const nextAttempt = buildDirectionalExpansionAttempt({
+          attempt: {
+            ...attempt,
+            bounds: attemptBounds,
+          },
+          corridorBounds,
+          boundaryHits: resolveBoundaryHits(result),
+          growStepTiles: Math.max(1, basePaddingTiles || attemptPaddingTiles || 1),
+          maxPaddingTiles: autoPaddingCap,
+        });
+        if (!nextAttempt) {
+          continue;
+        }
+        const nextKey = boundsKey(nextAttempt.bounds);
+        if (attemptedBounds.has(nextKey)) {
+          continue;
+        }
+        attemptedBounds.add(nextKey);
+        paddedAttemptQueue.push(nextAttempt);
+        autoExpansionAttemptsUsed += 1;
+        continue;
+      }
+
+      if (result.status === "budget_exceeded") {
+        break;
+      }
+    }
 
     lastPathRequest = {
       startWorld: { ...startWorld },
@@ -286,33 +620,44 @@ export function createHumanCommandController({
       resolvedGoalWorld: { ...resolvedGoal.world },
       wasGoalClamped: clampedTarget.wasClamped,
     };
-    lastPathDebug = result.debug || null;
-    lastGridSummary = {
-      cellSizeTiles: navigationGrid.cellSizeTiles,
-      cols: navigationGrid.cols,
-      rows: navigationGrid.rows,
-      originWorldX: navigationGrid.originWorldX,
-      originWorldY: navigationGrid.originWorldY,
-      endWorldX: navigationGrid.endWorldX,
-      endWorldY: navigationGrid.endWorldY,
-      walkableCount: navigationGrid.walkableCount,
-      blockedCount: navigationGrid.blockedCount,
-    };
+    lastPathDebug = selectedResult?.debug || null;
+    lastGridSummary = selectedGrid
+      ? {
+          cellSizeTiles: selectedGrid.cellSizeTiles,
+          cols: selectedGrid.cols,
+          rows: selectedGrid.rows,
+          originWorldX: selectedGrid.originWorldX,
+          originWorldY: selectedGrid.originWorldY,
+          endWorldX: selectedGrid.endWorldX,
+          endWorldY: selectedGrid.endWorldY,
+          walkableCount: selectedGrid.walkableCount,
+          blockedCount: selectedGrid.blockedCount,
+          paddingTilesUsed: selectedPaddingTiles,
+          expansionFactorUsed: selectedExpansionFactor,
+          expansionModeUsed: selectedExpansionMode,
+          boundsUsed: selectedBounds ? cloneBounds(selectedBounds) : null,
+          autoExpansionAttemptsUsed,
+          maxDynamicExpansionAttempts: maxAutoAttempts,
+          maxAutoPaddingTiles: autoPaddingCap,
+          expansionAttemptCount: expansionAttempts.length,
+          expansionAttempts,
+        }
+      : null;
 
-    if (result.status !== "found" || !Array.isArray(result.path)) {
+    if (selectedResult?.status !== "found" || !Array.isArray(selectedResult?.path)) {
       showMarker(resolvedGoal.world, false);
       lastPathResult = {
-        status: result.status || "no_path",
+        status: selectedResult?.status || "no_path",
         accepted: false,
       };
       lastWorldPath = [];
       return {
         accepted: false,
-        reason: result.status || "no_path",
+        reason: selectedResult?.status || "no_path",
       };
     }
 
-    const worldPath = dedupeWorldPath(pathWithoutStart(result.path, startWorld));
+    const worldPath = dedupeWorldPath(pathWithoutStart(selectedResult.path, startWorld));
     if (worldPath.length === 0) {
       humanController.clearPath();
     } else {
@@ -322,7 +667,7 @@ export function createHumanCommandController({
     lastGoalWorld = { ...resolvedGoal.world };
     repathAttemptUsed = false;
     lastPathResult = {
-      status: result.status,
+      status: selectedResult.status,
       accepted: true,
     };
     lastWorldPath = worldPath.map((point) => ({ ...point }));
@@ -331,8 +676,10 @@ export function createHumanCommandController({
       accepted: true,
       goalWorld: { ...resolvedGoal.world },
       pathLength: worldPath.length,
-      status: result.status,
+      status: selectedResult.status,
       wasGoalClamped: clampedTarget.wasClamped,
+      expansionAttemptCount: expansionAttempts.length,
+      expansionFactorUsed: selectedExpansionFactor,
     };
   }
 
@@ -448,7 +795,22 @@ export function createHumanCommandController({
               : [],
           }
         : null,
-      lastGridSummary: lastGridSummary ? { ...lastGridSummary } : null,
+      lastGridSummary: lastGridSummary
+        ? {
+            ...lastGridSummary,
+            boundsUsed: lastGridSummary.boundsUsed
+              ? cloneBounds(lastGridSummary.boundsUsed)
+              : null,
+            expansionAttempts: Array.isArray(lastGridSummary.expansionAttempts)
+              ? lastGridSummary.expansionAttempts.map((attempt) => ({
+                  ...attempt,
+                  boundaryHits: attempt.boundaryHits ? { ...attempt.boundaryHits } : null,
+                  paddedSides: attempt.paddedSides ? { ...attempt.paddedSides } : null,
+                  bounds: attempt.bounds ? cloneBounds(attempt.bounds) : null,
+                }))
+              : [],
+          }
+        : null,
       commandCooldownRemaining,
       hasQueuedCommand: queuedGoalWorld !== null,
     };
