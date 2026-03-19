@@ -41,7 +41,8 @@ Current game runtime gameplay slice includes:
 - one controllable human agent with geometry-based world-space movement/collision,
 - left-click and drag-box human selection,
 - `Ctrl + Left Click` world-space move command using sub-tile bidirectional A* with boundary-aware directional retry expansion,
-- backquote-toggle debug mode for path/collider/blocked-obstacle visualization.
+- backquote-toggle debug mode for path/collider/blocked-obstacle visualization,
+- zoom pipeline guardrails that keep zoom feel intact while reducing high-zoom render lag (documented in `GAME_RUNTIME.md`).
 
 ## Core Setting
 

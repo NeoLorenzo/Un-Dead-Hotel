@@ -30,6 +30,22 @@ const MAX_ZOOM_SENSITIVITY = 50.0;
 const ZOOM_SENSITIVITY_CURVE_POWER = 0.6;
 const ZOOM_LERP_SPEED_PER_SECOND = 18;
 const MAX_CHUNK_TEXTURE_REBUILDS_PER_FRAME = 8;
+const CHUNK_TEXTURE_TILE_PIXEL_TIERS = [
+  ...Array.from({ length: 16 }, (_, i) => START_TILE_PIXELS + i),
+  24,
+  28,
+  32,
+  36,
+  40,
+  44,
+  48,
+  52,
+  56,
+  60,
+];
+const CHUNK_TEXTURE_SWITCH_HYSTERESIS_PX = 0.75;
+const CHUNK_TEXTURE_REBUILD_DEBOUNCE_MS = 100;
+const CHUNK_TEXTURE_ZOOM_SETTLE_EPSILON = 0.02;
 const ROOM_THIN_WALL_RATIO = 0.2;
 const HUMAN_MOVE_SPEED_TILES_PER_SECOND = 2.4;
 const HUMAN_SPAWN_SEARCH_RADIUS_TILES = 10;
@@ -102,6 +118,51 @@ function moveTowards(current, target, maxStep) {
 
 function chunkKey(chunkX, chunkY) {
   return `${chunkX},${chunkY}`;
+}
+
+function nearestChunkTextureTilePixels(tilePixels) {
+  if (CHUNK_TEXTURE_TILE_PIXEL_TIERS.length === 0) {
+    return Math.max(MIN_TILE_PIXELS, Math.min(MAX_TILE_PIXELS, Math.round(tilePixels)));
+  }
+
+  let nearest = CHUNK_TEXTURE_TILE_PIXEL_TIERS[0];
+  let bestDistance = Math.abs(tilePixels - nearest);
+
+  for (let i = 1; i < CHUNK_TEXTURE_TILE_PIXEL_TIERS.length; i += 1) {
+    const candidate = CHUNK_TEXTURE_TILE_PIXEL_TIERS[i];
+    const distance = Math.abs(tilePixels - candidate);
+    if (distance < bestDistance) {
+      nearest = candidate;
+      bestDistance = distance;
+    }
+  }
+
+  return nearest;
+}
+
+function resolveChunkTextureTilePixels(tilePixels, currentTierTilePixels) {
+  const clampedTilePixels = Math.max(MIN_TILE_PIXELS, Math.min(MAX_TILE_PIXELS, tilePixels));
+  const nearest = nearestChunkTextureTilePixels(clampedTilePixels);
+  if (!Number.isFinite(currentTierTilePixels)) {
+    return nearest;
+  }
+  if (nearest === currentTierTilePixels) {
+    return currentTierTilePixels;
+  }
+  if (!CHUNK_TEXTURE_TILE_PIXEL_TIERS.includes(currentTierTilePixels)) {
+    return nearest;
+  }
+
+  const midpoint = (nearest + currentTierTilePixels) * 0.5;
+  if (nearest > currentTierTilePixels) {
+    return clampedTilePixels >= midpoint + CHUNK_TEXTURE_SWITCH_HYSTERESIS_PX
+      ? nearest
+      : currentTierTilePixels;
+  }
+
+  return clampedTilePixels <= midpoint - CHUNK_TEXTURE_SWITCH_HYSTERESIS_PX
+    ? nearest
+    : currentTierTilePixels;
 }
 
 function screenToWorldTileSpace(screenX, screenY, cameraTile, tilePixels, width, height) {
@@ -236,6 +297,9 @@ function createRuntimeScene(Phaser) {
       this.chunkTextureSerial = 0;
       this.chunkFallbackGraphics = null;
       this.chunkBorderGraphics = null;
+      this.chunkTextureTilePixels = START_TILE_PIXELS;
+      this.chunkTextureTierLocked = false;
+      this.lastZoomInputAtMs = -Infinity;
       this.pendingChunkTextures = 0;
       this.humanController = null;
       this.humanSelectionController = null;
@@ -367,6 +431,7 @@ function createRuntimeScene(Phaser) {
         );
         if (Math.abs(next - this.targetTilePixels) > 0.0001) {
           this.targetTilePixels = next;
+          this.lastZoomInputAtMs = this.time?.now ?? performance.now();
           this.dirty = true;
         }
       });
@@ -492,6 +557,19 @@ function createRuntimeScene(Phaser) {
         this.dirty = true;
       }
 
+      const nowMs = this.time?.now ?? performance.now();
+      const zoomRecentlyChanged =
+        nowMs - this.lastZoomInputAtMs < CHUNK_TEXTURE_REBUILD_DEBOUNCE_MS;
+      const zoomInFlight =
+        Math.abs(this.targetTilePixels - this.tilePixels) > CHUNK_TEXTURE_ZOOM_SETTLE_EPSILON;
+      const nextChunkTextureTierLocked = zoomRecentlyChanged || zoomInFlight;
+      if (nextChunkTextureTierLocked !== this.chunkTextureTierLocked) {
+        this.chunkTextureTierLocked = nextChunkTextureTierLocked;
+        if (!nextChunkTextureTierLocked) {
+          this.dirty = true;
+        }
+      }
+
       if (this.dirty) {
         this.dirty = false;
         this.renderRuntimeFrame();
@@ -535,10 +613,15 @@ function createRuntimeScene(Phaser) {
     renderRuntimeFrame() {
       const width = this.scale.width;
       const height = this.scale.height;
-      const renderTilePixels = Math.max(1, Math.round(this.tilePixels));
       const snapshot = this.runtime.getFrameSnapshot(width, height, this.tilePixels);
       const visibleKeys = new Set();
-      const expectedPixelSize = Math.max(1, snapshot.chunkSize * renderTilePixels);
+      if (!this.chunkTextureTierLocked) {
+        this.chunkTextureTilePixels = resolveChunkTextureTilePixels(
+          this.tilePixels,
+          this.chunkTextureTilePixels
+        );
+      }
+      const expectedPixelSize = Math.max(1, snapshot.chunkSize * this.chunkTextureTilePixels);
       let rebuildBudget = MAX_CHUNK_TEXTURE_REBUILDS_PER_FRAME;
       let pendingChunkTextures = 0;
 

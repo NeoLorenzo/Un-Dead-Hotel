@@ -64,6 +64,17 @@ Game runtime (`apps/phaser/phaserApp.js`) uses a chunk texture pipeline:
 - draws tile classes and thin room wall overlays with Phaser.
 - syncs human/controller overlays after world chunk draw.
 
+Zoom/render performance guardrails (implemented March 19, 2026):
+
+- keeps visual zoom interpolation continuous (`tilePixels` remains smooth),
+- uses chunk texture tile-pixel tiers to avoid rebuilding at every intermediate zoom value,
+- keeps exact texture matching in the `5-20` tile-pixel range,
+- uses coarser texture tiers above `20` tile pixels (`24, 28, 32, ... 60`),
+- applies tier-switch hysteresis (small buffer before changing tiers) to prevent flip-flop rebuilds,
+- applies short rebuild debounce while wheel zoom is actively changing.
+
+These guardrails reduce high-zoom rebuild churn without changing configured zoom speed behavior.
+
 When debug mode is enabled in game runtime:
 
 - applies blackout overlay,
@@ -100,6 +111,8 @@ Human debug visualization is separate from HUD text and rendered in dedicated ov
 
 Current design favors simplicity and deterministic correctness over advanced optimization. Potential future optimizations include:
 
+- additional adaptive chunk texture prewarm for likely next tiers,
+- optional worker-thread chunk rasterization when browser support allows,
 - draw culling and dirty-rect redraw,
 - chunk mesh caching,
 - asynchronous/background chunk generation,
