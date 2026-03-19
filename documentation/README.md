@@ -29,5 +29,4 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
 ## Current Runtime Entrypoints
 
 - Default runtime: `index.html` -> `apps/phaser/phaserApp.js`
-- Canvas fallback runtime: `game.html` -> `apps/game/gameApp.js`
-- Debug fallback runtime: `debug.html` -> `main.js` -> `apps/debug/debugApp.js`
+- Debug runtime: `debug.html` -> `main.js` -> `apps/debug/debugApp.js`

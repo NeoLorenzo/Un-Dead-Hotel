@@ -47,12 +47,22 @@ const TILE_COLOR_ROOM_DOOR = "#ff9100";
 const TILE_COLOR_DEFAULT = "#8f8f8f";
 const TILE_COLOR_ROOM_THIN_WALL = "#8f8f8f";
 
-const metaElement = document.getElementById("phaser-meta");
-const mountElement = document.getElementById("phaser-game-root");
+const metaElement = document.getElementById("game-meta");
+const mountElement = document.getElementById("game-root");
+const runtimeOverlayElement = document.getElementById("runtime-overlay");
 
 if (!mountElement) {
-  throw new Error("Phaser mount element not found.");
+  throw new Error("Game runtime mount element not found.");
 }
+
+function setRuntimeOverlayVisible(visible) {
+  if (!runtimeOverlayElement) {
+    return;
+  }
+  runtimeOverlayElement.hidden = !visible;
+}
+
+setRuntimeOverlayVisible(false);
 
 const runtimeHud = createRuntimeHud({
   element: metaElement,
@@ -340,6 +350,7 @@ function createRuntimeScene(Phaser) {
         if (this.humanCommandController) {
           this.humanCommandController.setDebugEnabled(this.debugOverlayEnabled);
         }
+        setRuntimeOverlayVisible(this.debugOverlayEnabled);
         this.dirty = true;
       };
       this.input.keyboard.on("keydown", this.handleDebugKeyDown);
@@ -482,8 +493,8 @@ function createRuntimeScene(Phaser) {
       }
 
       if (this.dirty) {
-        this.renderRuntimeFrame();
         this.dirty = false;
+        this.renderRuntimeFrame();
       }
     }
 
@@ -657,14 +668,14 @@ function createRuntimeScene(Phaser) {
   };
 }
 
-async function bootPhaserRuntime() {
+async function bootGameRuntime() {
   try {
     const Phaser = await loadPhaserModule();
     const RuntimeScene = createRuntimeScene(Phaser);
 
     new Phaser.Game({
       type: Phaser.AUTO,
-      parent: "phaser-game-root",
+      parent: "game-root",
       width: GAME_WIDTH,
       height: GAME_HEIGHT,
       pixelArt: true,
@@ -678,17 +689,17 @@ async function bootPhaserRuntime() {
         },
       },
       scale: {
-        mode: Phaser.Scale.FIT,
-        autoCenter: Phaser.Scale.CENTER_BOTH,
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.NO_CENTER,
       },
     });
   } catch (error) {
     if (metaElement) {
-      metaElement.textContent = `Phaser runtime failed to load: ${error.message}`;
+      metaElement.textContent = `Game runtime failed to load: ${error.message}`;
     }
     mountElement.textContent =
-      "Unable to load Phaser runtime. Check internet access or CDN blocking.";
+      "Unable to load game runtime. Check internet access or CDN blocking.";
   }
 }
 
-bootPhaserRuntime();
+bootGameRuntime();

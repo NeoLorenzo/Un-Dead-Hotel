@@ -241,55 +241,52 @@ h1 {
 
 .game-runtime-page {
   margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
 }
 
-.game-runtime-main {
-  padding: 12px;
-}
-
-.game-runtime-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 0 0 8px;
-}
-
-.game-runtime-header h1 {
-  margin: 0;
-}
-
-#game-meta {
-  margin: 0 0 8px;
-  font-size: 12px;
-}
-
-#game-canvas {
-  display: block;
-  width: 100%;
-  height: auto;
-  border: 1px solid #222222;
-  background: #ffffff;
-  image-rendering: pixelated;
-}
-
-#phaser-game-root {
-  display: block;
-  width: 100%;
-  min-height: 420px;
-  border: 1px solid #222222;
+#game-root {
+  position: fixed;
+  inset: 0;
   background: #101015;
   overflow: hidden;
 }
 
-#phaser-game-root canvas {
+#game-root canvas {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
   image-rendering: pixelated;
 }
 
-.game-runtime-help {
-  margin: 8px 0 0;
+#runtime-overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(80vw, 920px);
+  pointer-events: none;
+}
+
+#runtime-overlay[hidden] {
+  display: none !important;
+}
+
+#runtime-overlay .nav-link {
+  width: fit-content;
+  pointer-events: auto;
+}
+
+#game-meta {
+  margin: 0;
   font-size: 12px;
+  line-height: 1.35;
+  padding: 8px 10px;
+  border: 1px solid #777777;
+  background: rgba(245, 245, 245, 0.95);
+  color: #111111;
 }

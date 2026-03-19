@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document freezes the runtime-facing contracts for engine modules before Phaser integration.
+This document freezes the runtime-facing contracts for engine modules in the game runtime architecture (Phaser-based).
 
 Contract version: `v1`  
 Frozen on: `March 18, 2026`
@@ -12,7 +12,7 @@ Frozen on: `March 18, 2026`
 - Engine modules under `engine/` must remain framework-agnostic.
 - Engine modules must not import Phaser.
 - Engine modules must not depend on DOM/canvas APIs.
-- App runtimes (`apps/game`, future `apps/phaser`) are allowed to compose engine modules differently, but must consume these same contracts.
+- App runtimes are allowed to compose engine modules differently, but must consume these same contracts.
 
 ## World Store Contract
 
@@ -60,48 +60,6 @@ Invariants:
 - Camera state is tile-space (`number`, may be fractional).
 - Chunk position is derived by flooring tile position with `chunkSize`.
 
-## Surface Renderer Contract (Current Canvas Runtime)
-
-Factory:
-
-- `createWorldSurface(config)`
-
-Returned API:
-
-- `resizeToWindow(options?) -> { width: number, height: number }`
-- `render({ cameraTileX, cameraTileY, ensureChunk }) -> RenderFrame`
-- `getViewportChunkBounds(cameraTileX, cameraTileY) -> ViewportBounds`
-- `getTilePixels() -> number`
-- `setTilePixels(nextTilePixels) -> boolean`
-
-Required structures:
-
-- `ViewportBounds`
-  - `{ minChunkX: number, maxChunkX: number, minChunkY: number, maxChunkY: number }`
-- `RenderFrame`
-  - `{ bounds: ViewportBounds, drawnChunks: number, pendingChunkSprites: number, width: number, height: number }`
-
-## Input Contract
-
-Pan input:
-
-- `createKeyboardPanInput({ speedTilesPerSecond, onMove, target? })`
-  - `start()`
-  - `stop()`
-  - movement callback payload: `{ dx: number, dy: number }`
-
-Zoom input:
-
-- `createZoomInput({ onZoom, target?, wheelTarget?, zoomStep? })`
-  - `start()`
-  - `stop()`
-  - zoom callback payload: `{ delta: number, source: "wheel" | "key" }`
-
-Current game runtime policy:
-
-- Pan keys: `WASD`
-- Zoom: mouse wheel only
-
 ## HUD Contract
 
 Factory:
@@ -125,4 +83,3 @@ Any runtime implementation must:
 
 - Runtime-facing APIs documented for chunk access/loading, camera state, and HUD inputs.
 - Framework boundary constraints documented (`engine/` remains framework-agnostic).
-- Existing canvas runtime behavior unchanged by this phase.

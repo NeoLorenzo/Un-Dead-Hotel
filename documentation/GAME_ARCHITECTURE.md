@@ -6,7 +6,7 @@ The current architecture is organized around strict separation of concerns:
 
 - generation logic in engine modules,
 - runtime orchestration in app entry modules,
-- multiple runtime frontends (Phaser default, canvas fallback, debug fallback) as separate consumers of shared generation systems.
+- multiple runtime frontends (Phaser default and debug fallback) as separate consumers of shared generation systems.
 
 ## Runtime Entrypoints
 
@@ -17,14 +17,6 @@ The current architecture is organized around strict separation of concerns:
   - run streamed world rendering with Phaser,
   - provide smooth camera/input controls,
   - use engine systems through the Phaser adapter boundary.
-
-### Canvas Fallback Runtime
-
-- Entry chain: `game.html` -> `apps/game/gameApp.js`
-- Purpose:
-  - run streamed world rendering,
-  - preload 20x20 startup window,
-  - generate additional chunks on demand as camera moves.
 
 ### Debug Fallback Runtime
 
@@ -56,24 +48,11 @@ The current architecture is organized around strict separation of concerns:
   - preload window generation,
   - loaded-bounds accounting.
 
-- `engine/world/worldSurface.js`
-- Responsibilities:
-  - canvas sizing,
-  - viewport chunk bounds calculation,
-  - chunk tile rendering,
-  - thin room wall overlays.
-
 - `engine/world/cameraController.js`
 - Responsibilities:
   - camera tile-space state,
   - chunk-space derivation,
-  - movement helpers,
-  - key-to-movement mapping support.
-
-- `engine/world/inputController.js`
-- Responsibilities:
-  - keyboard listener lifecycle,
-  - movement callback dispatch from input.
+  - movement helpers.
 
 - `engine/world/runtimeHud.js`
 - Responsibilities:
@@ -83,8 +62,6 @@ The current architecture is organized around strict separation of concerns:
 
 - `apps/debug/debugApp.js`
   - debug-specific rendering and diagnostics UI.
-- `apps/game/gameApp.js`
-  - composition root for game runtime modules.
 
 ### Phaser Human Runtime Modules (Implemented March 19, 2026)
 
@@ -115,7 +92,7 @@ Dependency direction for this slice:
 
 ## Data Flow (Game Runtime)
 
-1. Runtime app (`apps/phaser/phaserApp.js` or `apps/game/gameApp.js`) builds runtime modules.
+1. Runtime app (`apps/phaser/phaserApp.js`) builds runtime modules.
 2. Phaser path composes adapter + human controllers + debug overlay through explicit interfaces.
 3. Camera chunk coordinate is computed from camera tile position.
 4. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
@@ -129,7 +106,7 @@ Dependency direction for this slice:
 Compared with the previous monolithic debug-driven approach, the architecture now:
 
 - avoids generation logic in top-level UI entry files,
-- allows debug/game runtimes to evolve independently,
+- allows debug/runtime frontends to evolve independently,
 - provides module boundaries suitable for future testing and replacement,
 - supports incremental extension of world/runtime systems without reworking generator internals.
 
@@ -139,6 +116,6 @@ Recommended next extension pattern:
 
 1. Add new behavior in `engine/world/*` or `engine/generation/*` modules.
 2. Expose minimal, explicit APIs.
-3. Keep `apps/phaser/phaserApp.js` and `apps/game/gameApp.js` as composition roots.
+3. Keep `apps/phaser/phaserApp.js` as the runtime composition root.
 4. Keep gameplay behavior in focused controllers (`apps/phaser/human/*`, `apps/phaser/debug/*`).
 5. Keep debug logic isolated from core movement/pathfinding modules.

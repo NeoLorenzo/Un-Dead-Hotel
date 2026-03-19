@@ -4,9 +4,8 @@ Un-Dead Hotel is a web-based, real-time post-apocalyptic colony management game 
 
 ## Runtime Entrypoints
 
-- Default runtime (Phaser): `index.html`
-- Canvas runtime fallback: `game.html`
-- Debug runtime fallback: `debug.html`
+- Game runtime: `index.html`
+- Debug runtime: `debug.html`
 
 ## Documentation
 
@@ -27,6 +26,5 @@ All project documentation is in the `documentation/` folder.
 1. Start server: `node server.js`
 2. Open `http://localhost:8080`
 3. Use:
-   - `/index.html` for default Phaser runtime
-   - `/game.html` for canvas runtime fallback
+   - `/index.html` for game runtime
    - `/debug.html` for procedural generation debug runtime

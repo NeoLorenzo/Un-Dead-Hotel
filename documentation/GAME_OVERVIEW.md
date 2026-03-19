@@ -29,15 +29,14 @@ The core fantasy is "Fallout Shelter + RimWorld in an infinite post-apocalyptic 
 
 ## Current Build Status
 
-The codebase currently provides three runtime routes:
+The codebase currently provides two runtime routes:
 
-- `index.html`: default Phaser runtime
-- `game.html`: canvas runtime fallback
+- `index.html`: game runtime
 - `debug.html`: procedural generation debug mode
 
 The procedural generation system is deterministic by chunk coordinate and world seed and is shared by all runtime routes.
 
-Current Phaser runtime gameplay slice includes:
+Current game runtime gameplay slice includes:
 
 - one controllable human agent with geometry-based world-space movement/collision,
 - left-click and drag-box human selection,

@@ -1,8 +1,8 @@
-# Phaser Runtime Adapter API
+# Game Runtime Adapter API (Phaser)
 
 ## Purpose
 
-Defines the app-level adapter contract between Phaser scene code and engine world systems.
+Defines the app-level adapter contract between game runtime scene code and engine world systems.
 
 This keeps Phaser scene code focused on input/render orchestration and keeps deterministic world logic in `engine/`.
 
@@ -103,7 +103,7 @@ This keeps Phaser scene code focused on input/render orchestration and keeps det
 - Deterministic chunk data is sourced from `engine/world/worldStore.js`.
 - Scene code does not call generation functions directly.
 - Scene code does not duplicate generator logic.
-- Adapter is the only Phaser runtime path that touches world/camera engine modules.
+- Adapter is the only game runtime path that touches world/camera engine modules.
 - Stream window loading is idempotent per camera chunk (window refresh happens only when camera chunk center changes).
 - Tile/walkability helpers centralize tile semantics so gameplay/debug modules avoid direct world-store access.
 - Collision and navigation helpers centralize world-geometry access so gameplay modules avoid direct world-store coupling.

@@ -3,23 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Un-Dead Hotel Phaser Runtime</title>
+  <title>Un-Dead Hotel Game</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="game-runtime-page">
-  <main class="game-runtime-main">
-    <header class="game-runtime-header">
-      <h1>Un-Dead Hotel Phaser Runtime</h1>
+  <div id="game-root" aria-label="Game runtime mount">
+    <div id="runtime-overlay" hidden>
       <a class="nav-link" href="debug.html">Open Debug</a>
-      <a class="nav-link" href="game.html">Open Canvas Runtime</a>
-    </header>
-    <p id="phaser-meta"></p>
-    <div id="phaser-game-root" aria-label="Phaser runtime mount"></div>
-    <p class="game-runtime-help">
-      Phaser runtime: streamed chunk tile rendering driven by engine world data. Controls: Hold WASD to pan (including diagonal), mouse wheel to zoom.
-    </p>
-  </main>
+      <p id="game-meta"></p>
+    </div>
+  </div>
   <script type="module" src="apps/phaser/phaserApp.js"></script>
 </body>
 </html>

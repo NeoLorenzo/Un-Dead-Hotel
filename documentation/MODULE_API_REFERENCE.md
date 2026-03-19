@@ -38,20 +38,6 @@ Returned API:
 - `getLoadedChunkCount()`
 - `getLoadedAssignmentCount()`
 
-### `engine/world/worldSurface.js`
-
-Factory:
-
-- `createWorldSurface(config)`
-
-Returned API:
-
-- `resizeToWindow(options?)` -> sets canvas pixel size
-- `render({ cameraTileX, cameraTileY, ensureChunk })` -> draws frame
-- `getViewportChunkBounds(cameraTileX, cameraTileY)`
-- `getTilePixels()`
-- `setTilePixels(nextTilePixels)` -> `boolean` changed
-
 ### `engine/world/cameraController.js`
 
 - `createCameraController({ chunkSize, initialTileX?, initialTileY? })`
@@ -59,16 +45,6 @@ Returned API:
   - `setTilePosition(tileX, tileY)`
   - `getTilePosition()`
   - `getChunkPosition()`
-- `cameraMoveFromKey(key, stepTiles)` -> `{ dx, dy } | null`
-
-### `engine/world/inputController.js`
-
-- `createKeyboardPanInput({ speedTilesPerSecond, onMove, target? })`
-  - `start()`
-  - `stop()`
-- `createZoomInput({ onZoom, target?, wheelTarget?, zoomStep? })`
-  - `start()`
-  - `stop()`
 
 ### `engine/world/runtimeHud.js`
 
@@ -101,19 +77,6 @@ Returned API:
   - returns `{ findPath }`
 
 ## App Composition Layer
-
-### `apps/game/gameApp.js`
-
-Composition responsibilities:
-
-- instantiate all world modules,
-- coordinate render cycle,
-- connect resize/input events to runtime systems.
-
-Current runtime control policy:
-
-- pan: `WASD`
-- zoom: mouse wheel
 
 ### `apps/phaser/phaserRuntimeAdapter.js`
 

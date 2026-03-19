@@ -39,19 +39,3 @@ export function createCameraController({
     getChunkPosition,
   };
 }
-
-export function cameraMoveFromKey(key, stepTiles) {
-  if (key === "ArrowUp" || key === "w" || key === "W") {
-    return { dx: 0, dy: -stepTiles };
-  }
-  if (key === "ArrowDown" || key === "s" || key === "S") {
-    return { dx: 0, dy: stepTiles };
-  }
-  if (key === "ArrowLeft" || key === "a" || key === "A") {
-    return { dx: -stepTiles, dy: 0 };
-  }
-  if (key === "ArrowRight" || key === "d" || key === "D") {
-    return { dx: stepTiles, dy: 0 };
-  }
-  return null;
-}

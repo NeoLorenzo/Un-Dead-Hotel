@@ -2,21 +2,18 @@
 
 ## Runtime Purpose
 
-The default runtime is Phaser:
+The default game runtime is Phaser-based:
 
 - `index.html` -> `apps/phaser/phaserApp.js`
 
-Fallback runtimes remain available:
+Debug runtime remains available:
 
-- `game.html` -> `apps/game/gameApp.js` (canvas fallback)
-- `debug.html` -> `main.js` -> `apps/debug/debugApp.js` (debug fallback)
-
-Both Phaser and canvas runtimes compose world systems without implementing chunk generation internals directly.
+- `debug.html` -> `main.js` -> `apps/debug/debugApp.js`
 
 ## Startup Sequence
 
 1. Resolve runtime DOM elements.
-2. Create Phaser runtime adapter (`createPhaserRuntimeAdapter`).
+2. Create runtime adapter (`createPhaserRuntimeAdapter`).
 3. Create gameplay controllers:
    - `humanController`
    - `humanSelectionController`
@@ -38,12 +35,12 @@ Both Phaser and canvas runtimes compose world systems without implementing chunk
 
 ## Input Model
 
-Keyboard/mouse controls in both runtime paths follow the same policy.
+Keyboard/mouse controls in the runtime path follow the same policy.
 
 Key mapping:
 
 - WASD
-- Backquote (`\``) toggles human debug overlay mode in Phaser runtime.
+- Backquote (`\``) toggles human debug overlay mode in game runtime.
 
 Zoom input:
 
@@ -51,7 +48,7 @@ Zoom input:
 
 Movement updates camera tile position through `cameraController`.
 
-Human input policy in Phaser runtime:
+Human input policy in game runtime:
 
 - Left click: single-select human.
 - Left click + drag: box-select human.
@@ -59,15 +56,7 @@ Human input policy in Phaser runtime:
 
 ## Render Model
 
-Canvas fallback (`apps/game/gameApp.js`) uses `worldSurface.render(...)`:
-
-- clears canvas,
-- computes viewport chunk bounds from camera tile position,
-- fetches/generates visible chunks through callback,
-- draws tile colors by semantic class,
-- overlays thin room walls.
-
-Phaser default (`apps/phaser/phaserApp.js`) uses a chunk texture pipeline:
+Game runtime (`apps/phaser/phaserApp.js`) uses a chunk texture pipeline:
 
 - computes visible chunk bounds from camera tile position,
 - rebuilds chunk textures under a per-frame budget,
@@ -75,7 +64,7 @@ Phaser default (`apps/phaser/phaserApp.js`) uses a chunk texture pipeline:
 - draws tile classes and thin room wall overlays with Phaser.
 - syncs human/controller overlays after world chunk draw.
 
-When debug mode is enabled in Phaser runtime:
+When debug mode is enabled in game runtime:
 
 - applies blackout overlay,
 - highlights blocked collision geometry obstacles,
@@ -89,7 +78,7 @@ When debug mode is enabled in Phaser runtime:
 - Pathfinding uses engine `subTilePathfinder` bidirectional A* with heap-based frontiers.
 - Pathfinder search stats expose boundary-touch and likely-clipped-domain signals for command retries.
 - Command controller retries with configured expansion factors, then boundary-aware directional nav-window growth when clipped.
-- Current Phaser scene tuning uses bounded caps for performance (`maxPathNodes=32000`, `maxDynamicExpansionAttempts=7`, `maxAutoPaddingTiles=1536`).
+- Current scene tuning uses bounded caps for performance (`maxPathNodes=32000`, `maxDynamicExpansionAttempts=7`, `maxAutoPaddingTiles=1536`).
 - Human controller follows resulting world-space waypoints and uses geometry collision resolution in motion updates.
 
 ## HUD Model
@@ -103,7 +92,7 @@ When debug mode is enabled in Phaser runtime:
 - viewport chunk draw count,
 - current camera chunk coordinate.
 
-Phaser runtime appends extra renderer diagnostics (pending chunk textures and Phaser version) after the shared HUD content.
+Game runtime appends extra renderer diagnostics (pending chunk textures and Phaser version) after the shared HUD content.
 
 Human debug visualization is separate from HUD text and rendered in dedicated overlay layers.
 

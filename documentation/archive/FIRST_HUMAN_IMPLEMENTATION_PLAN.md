@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the step-by-step plan for implementing the first playable human agent in the Phaser runtime.
+Define the step-by-step plan for implementing the first playable human agent in the game runtime.
 
 ## Completion Status
 
@@ -90,7 +90,7 @@ Define the step-by-step plan for implementing the first playable human agent in 
 ## Technical Design
 
 1. Runtime data access
-   - Extend Phaser runtime adapter with tile query helpers so scene code can ask:
+   - Extend game runtime adapter with tile query helpers so scene code can ask:
    - `getTileAtWorld(tileX, tileY)`
    - `isWalkableTile(tileX, tileY)`
    - Adapter remains the only Phaser path touching world store/camera engine modules.
@@ -683,7 +683,7 @@ This roadmap defines how to evolve from tile-locked movement/pathing to world-sp
   - Updated `engine/world/subTilePathfinder.js` to use bidirectional A* with heap-based open frontiers.
   - Updated `engine/world/subTilePathfinder.js` to emit `searchStats` with boundary-hit and clipped-domain signals.
   - Updated `apps/phaser/human/humanCommandController.js` with boundary-aware directional nav-window expansion retries for longer detours.
-  - Tuned Phaser runtime command limits for balance between long-route reliability and frame stability (`maxPathNodes=32000`, `maxDynamicExpansionAttempts=7`, `maxAutoPaddingTiles=1536`).
+  - Tuned game runtime command limits for balance between long-route reliability and frame stability (`maxPathNodes=32000`, `maxDynamicExpansionAttempts=7`, `maxAutoPaddingTiles=1536`).
 - Verification status (historical log):
   - Runtime/manual movement validation that routes now pass through valid sub-tile lanes around thin obstacles.
 - Notes:
@@ -781,7 +781,7 @@ This roadmap defines how to evolve from tile-locked movement/pathing to world-sp
 - In debug mode, current/last computed path and human collider boundary are visible.
 - Human gameplay logic is split into focused modules (no single "god" controller).
 - `phaserApp.js` acts as composition root rather than behavior-heavy implementation.
-- Pathfinding remains framework-agnostic and testable without Phaser runtime.
+- Pathfinding remains framework-agnostic and testable without game runtime.
 
 ## Risks and Mitigations
 
@@ -814,4 +814,5 @@ This roadmap defines how to evolve from tile-locked movement/pathing to world-sp
   - Sprite: Option A (procedural Phaser placeholder).
   - Pathfinding (initial lock): Option A (4-dir A* + Manhattan heuristic); runtime final state is sub-tile bidirectional A* with boundary-aware directional expansion retries.
   - Rigid body (initial lock): Option A (Phaser Arcade Physics dynamic body + blocked-tile collision); runtime final state is geometry-based world-rect collision resolution.
+
 
