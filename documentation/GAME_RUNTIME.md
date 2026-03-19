@@ -14,15 +14,15 @@ Debug runtime remains available:
 
 1. Resolve runtime DOM elements.
 2. Create runtime adapter (`createPhaserRuntimeAdapter`).
-3. Create gameplay controllers:
-   - `humanController`
-   - `humanSelectionController`
-   - `humanCommandController`
-   - `humanDebugOverlay`
-4. Register pointer and keyboard handlers.
-5. Create chunk renderer resources and `runtimeHud`.
-6. Ensure `20x20` startup stream window.
-7. Render first frame.
+3. Create runtime debug controller (`createRuntimeDebugController`).
+4. Create gameplay controllers for active runtime mode.
+   - Current mode (`zombie_wander`) composes:
+   - `zombieManager`
+   - `zombieDebugOverlay`
+5. Register pointer and keyboard handlers.
+6. Create chunk renderer resources and `runtimeHud`.
+7. Ensure `20x20` startup stream window.
+8. Render first frame.
 
 ## Streaming Behavior
 
@@ -40,7 +40,7 @@ Keyboard/mouse controls in the runtime path follow the same policy.
 Key mapping:
 
 - WASD
-- Backquote (`\``) toggles human debug overlay mode in game runtime.
+- Backquote (`\``) toggles runtime-level debug mode in game runtime.
 
 Zoom input:
 
@@ -48,11 +48,12 @@ Zoom input:
 
 Movement updates camera tile position through `cameraController`.
 
-Human input policy in game runtime:
+Current runtime mode input policy (`zombie_wander`):
 
-- Left click: single-select human.
-- Left click + drag: box-select human.
-- `Ctrl + Left Click`: issue world-space move command for selected human.
+- Left click: spawn zombie at pointer world position.
+- Blocked click target: fallback to nearest walkable tile center (`3`-tile search radius).
+- If no walkable fallback is found: spawn is rejected.
+- Human selection and human move-command handlers are disabled in this mode.
 
 ## Render Model
 
@@ -62,7 +63,7 @@ Game runtime (`apps/phaser/phaserApp.js`) uses a chunk texture pipeline:
 - rebuilds chunk textures under a per-frame budget,
 - reuses cached chunk textures between frames,
 - draws tile classes and thin room wall overlays with Phaser.
-- syncs human/controller overlays after world chunk draw.
+- syncs active gameplay overlays after world chunk draw.
 
 Zoom/render performance guardrails (implemented March 19, 2026):
 
@@ -79,10 +80,38 @@ When debug mode is enabled in game runtime:
 
 - applies blackout overlay,
 - highlights blocked collision geometry obstacles,
-- draws path/visited-node diagnostics,
-- draws human collider boundary.
+- draws zombie vision cones and heading vectors,
+- draws zombie waypoint path segment diagnostics,
+- draws zombie waypoint-selection candidate markers:
+  - expanded-selected candidates,
+  - fallback-selected candidates,
+  - no-continuation candidates,
+  - failed-sector candidates,
+  - blocked candidates,
+  - line-of-sight blocked candidates,
+- draws wall-clipped cone ray samples,
+- draws failed-sector memory arcs,
+- draws active recovery indicator rings,
+- draws zombie collider boundaries.
 
-## Human Path Command Model (Phaser)
+## Zombie Wander Model (Phaser)
+
+- `zombieManager` owns spawned zombie set and update/sync orchestration.
+- `zombieController` owns per-zombie world movement state.
+- `zombieWanderPlanner` picks random in-cone waypoints with:
+  - world walkability validation,
+  - line-of-sight validation through world geometry.
+- Candidate sampling uses wall-clipped cone rays so forward search is bounded by nearby geometry.
+- Planner applies short-horizon waypoint expansion:
+  - prefer waypoint `A` only when continuation `B` from `A` exists,
+  - fallback to best single-step waypoint when continuation fails within attempt budget.
+- Manager tracks failed angular sectors with short TTL memory and excludes them during sampling.
+- Manager applies bounded recovery heading rotation after repeated no-candidate streaks.
+- Movement is direct world-space steering to waypoint (no A* for this slice).
+- When waypoint is reached/cleared or blocked, manager triggers immediate repick.
+- Nearby zombies apply soft separation nudges to avoid persistent overlap.
+
+## Human Path Command Model (Phaser, Inactive In Current Mode)
 
 - Command controller resolves nearest navigable world goal from pointer target.
 - Runtime adapter builds an obstacle-inflated sub-tile navigation grid around command bounds.
@@ -91,6 +120,12 @@ When debug mode is enabled in game runtime:
 - Command controller retries with configured expansion factors, then boundary-aware directional nav-window growth when clipped.
 - Current scene tuning uses bounded caps for performance (`maxPathNodes=32000`, `maxDynamicExpansionAttempts=7`, `maxAutoPaddingTiles=1536`).
 - Human controller follows resulting world-space waypoints and uses geometry collision resolution in motion updates.
+
+## Debug Controller Model
+
+- Runtime debug ownership is centralized in `runtimeDebugController`.
+- Debug renderers register with runtime controller (human/zombie overlays).
+- Toggle state is no longer owned by any individual gameplay controller.
 
 ## HUD Model
 
@@ -105,7 +140,7 @@ When debug mode is enabled in game runtime:
 
 Game runtime appends extra renderer diagnostics (pending chunk textures and Phaser version) after the shared HUD content.
 
-Human debug visualization is separate from HUD text and rendered in dedicated overlay layers.
+Runtime debug visualization is separate from HUD text and rendered in dedicated overlay layers.
 
 ## Performance Notes
 

@@ -150,9 +150,76 @@ Returned API includes:
   - `getDebugState()` (includes expansion-attempt summary and per-attempt bounds/boundary metadata)
   - `destroy()`
 
+### `apps/phaser/debug/runtimeDebugController.js`
+
+- `createRuntimeDebugController({ onVisibilityChanged?, initialEnabled? })`
+  - `addRenderer(renderer)`
+  - `removeRenderer(renderer)`
+  - `setEnabled(enabled)`
+  - `toggle()` -> returns current enabled state
+  - `isEnabled()`
+  - `renderFrame(frameState)`
+  - `destroy()`
+
 ### `apps/phaser/debug/humanDebugOverlay.js`
 
 - `createHumanDebugOverlay({ scene, runtime, humanController, commandController? })`
+  - `setEnabled(enabled)`
+  - `isEnabled()`
+  - `renderFrame({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
+  - `clear()`
+  - `destroy()`
+
+### `apps/phaser/zombie/zombieController.js`
+
+- `createZombieController({ id, scene, runtime, initialWorld, moveSpeedTilesPerSecond?, arrivalRadiusTiles? })`
+  - waypoint/motion:
+    - `setWaypointWorld(waypointWorld)`
+    - `clearWaypoint()`
+    - `hasWaypoint()`
+    - `update(dtSeconds)`
+    - `nudge(deltaWorldX, deltaWorldY)` (soft separation support)
+  - render/sync:
+    - `syncToView({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
+  - state/query:
+    - `getId()`
+    - `getWorldPosition()`
+    - `getHeadingRadians()`
+    - `setHeadingRadians(headingRadians)`
+    - `rotateHeading(deltaRadians)`
+    - `getVisionCone()` -> `{ angleDegrees, rangeTiles }`
+    - `getColliderWorld()`
+    - `getDebugState()`
+  - lifecycle:
+    - `destroy()`
+
+### `apps/phaser/zombie/zombieWanderPlanner.js`
+
+- `createZombieWanderPlanner({ runtime, candidateAttempts?, continuationAttempts?, lineCheckStepTiles?, coneClipRayCount? })`
+  - `pickWaypointForZombie(zombieController, options?)`
+    - default return: `waypointWorld | null`
+    - options:
+      - `includeDebug?: boolean`
+      - `blockedSectorsRadians?: Array<{ centerRadians, halfAngleRadians }>`
+    - debug return when `options.includeDebug === true`:
+      - `{ waypoint: waypointWorld | null, debug: { reason, attempts, continuationAttempts, rayCount, raySamples, candidates } }`
+      - candidate `status` values: `"expanded_selected" | "fallback_selected" | "no_continuation" | "blocked" | "los_blocked" | "failed_sector"`
+
+### `apps/phaser/zombie/zombieManager.js`
+
+- `createZombieManager({ scene, runtime, spawnSearchRadiusTiles?, waypointCandidateAttempts?, waypointContinuationAttempts?, waypointConeClipRayCount?, noCandidateStreakThreshold?, recoveryDurationSeconds?, recoveryRotateRadiansPerSecond?, failedSectorMemoryTtlSeconds?, failedSectorHalfAngleDegrees? })`
+  - `spawnAtWorld(worldX, worldY)` -> `{ accepted, reason? , zombieId?, usedFallback?, spawnWorld? }`
+  - `update(dtSeconds)`
+  - `syncToView({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
+  - `getZombieCount()`
+  - `setZombieWaypoint(zombieId, waypointWorld)`
+  - `clearZombieWaypoint(zombieId)`
+  - `getDebugState()` (includes per-zombie waypoint selection diagnostics, per-zombie `wanderRecovery` state, and `lastSpawnAttempt` result)
+  - `destroy()`
+
+### `apps/phaser/debug/zombieDebugOverlay.js`
+
+- `createZombieDebugOverlay({ scene, runtime, zombieManager })`
   - `setEnabled(enabled)`
   - `isEnabled()`
   - `renderFrame({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`

@@ -63,42 +63,52 @@ The current architecture is organized around strict separation of concerns:
 - `apps/debug/debugApp.js`
   - debug-specific rendering and diagnostics UI.
 
-### Phaser Human Runtime Modules (Implemented March 19, 2026)
+### Phaser Runtime Modules (Current)
 
 - `apps/phaser/phaserApp.js`
   - Phaser scene runtime composition/orchestration root.
 - `apps/phaser/phaserRuntimeAdapter.js`
   - adapter boundary for world tile query, collision geometry, and navigation-grid access.
+- `apps/phaser/debug/runtimeDebugController.js`
+  - runtime-level debug toggle ownership and renderer orchestration.
 - `engine/world/aStarPathfinder.js`
   - framework-agnostic tile-grid A* utility retained for legacy/debug usage.
 - `engine/world/subTilePathfinder.js`
   - framework-agnostic sub-tile bidirectional A* pathfinding utility (heap-based frontier).
 - `apps/phaser/human/humanController.js`
-  - human state, movement, collider integration, and selection state.
+  - human state, movement, collider integration, and selection state (inactive in current runtime mode).
 - `apps/phaser/human/humanSelectionController.js`
-  - click and drag-box selection input handling.
+  - click and drag-box selection input handling (inactive in current runtime mode).
 - `apps/phaser/human/humanCommandController.js`
-  - `Ctrl + Left Click` world-space move command orchestration with boundary-aware directional nav-window expansion retries.
+  - `Ctrl + Left Click` world-space move command orchestration with boundary-aware directional nav-window expansion retries (inactive in current runtime mode).
 - `apps/phaser/debug/humanDebugOverlay.js`
-  - debug mode rendering for path, collider, and geometry obstacle highlighting.
+  - human debug renderer (inactive in current runtime mode).
+- `apps/phaser/zombie/zombieManager.js`
+  - zombie spawn, update orchestration, separation pass, failed-sector memory/recovery steering, and debug-state aggregation.
+- `apps/phaser/zombie/zombieController.js`
+  - per-zombie motion state and collision-aware direct steering to waypoint.
+- `apps/phaser/zombie/zombieWanderPlanner.js`
+  - wall-clipped in-cone waypoint sampling with blocked-sector filtering and short-horizon continuation expansion (`A -> B`) fallback policy.
+- `apps/phaser/debug/zombieDebugOverlay.js`
+  - zombie debug renderer for cones, clipped rays, path segments, waypoint candidate diagnostics, failed-sector arcs, recovery indicator, and colliders.
 
 Dependency direction for this slice:
 
 1. `phaserApp.js` composes controller modules.
-2. Controllers depend on adapter/pathfinder interfaces.
-3. Adapter owns concrete world-store access.
-4. Engine pathfinder remains Phaser-independent.
-5. Debug overlay consumes controller debug state and adapter tile iteration only.
+2. Runtime debug controller composes debug renderer modules.
+3. Controllers depend on adapter/pathfinder interfaces.
+4. Adapter owns concrete world-store access.
+5. Engine pathfinder remains Phaser-independent.
+6. Debug renderers consume controller debug state and adapter tile iteration only.
 
 ## Data Flow (Game Runtime)
 
 1. Runtime app (`apps/phaser/phaserApp.js`) builds runtime modules.
-2. Phaser path composes adapter + human controllers + debug overlay through explicit interfaces.
+2. Phaser path composes adapter + active gameplay modules + runtime debug controller through explicit interfaces.
 3. Camera chunk coordinate is computed from camera tile position.
 4. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
 5. Renderer requests visible chunks via `ensureChunk(...)` callback.
-6. Human command flow issues A* path requests via engine pathfinder and applies path to human controller.
-   - Runtime behavior uses sub-tile bidirectional A* and world-space waypoints.
+6. Current runtime mode (`zombie_wander`) routes left-click spawn to zombie manager and runs in-cone waypoint wandering.
 7. `runtimeHud.render(...)` presents runtime state metrics.
 
 ## Why This Is "Proper" Relative To Previous State
@@ -117,5 +127,5 @@ Recommended next extension pattern:
 1. Add new behavior in `engine/world/*` or `engine/generation/*` modules.
 2. Expose minimal, explicit APIs.
 3. Keep `apps/phaser/phaserApp.js` as the runtime composition root.
-4. Keep gameplay behavior in focused controllers (`apps/phaser/human/*`, `apps/phaser/debug/*`).
+4. Keep gameplay behavior in focused controllers (`apps/phaser/human/*`, `apps/phaser/zombie/*`, `apps/phaser/debug/*`).
 5. Keep debug logic isolated from core movement/pathfinding modules.

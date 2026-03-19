@@ -10,9 +10,12 @@ import { createSubTilePathfinder } from "../../engine/world/subTilePathfinder.js
 import { createRuntimeHud } from "../../engine/world/runtimeHud.js";
 import { createPhaserRuntimeAdapter } from "./phaserRuntimeAdapter.js";
 import { createHumanDebugOverlay } from "./debug/humanDebugOverlay.js";
+import { createRuntimeDebugController } from "./debug/runtimeDebugController.js";
+import { createZombieDebugOverlay } from "./debug/zombieDebugOverlay.js";
 import { createHumanController } from "./human/humanController.js";
 import { createHumanCommandController } from "./human/humanCommandController.js";
 import { createHumanSelectionController } from "./human/humanSelectionController.js";
+import { createZombieManager } from "./zombie/zombieManager.js";
 
 const GAME_WIDTH = 1280;
 const GAME_HEIGHT = 720;
@@ -53,7 +56,11 @@ const HUMAN_COMMAND_MAX_PATH_NODES = 32000;
 const HUMAN_COMMAND_NAV_PADDING_EXPANSION_FACTORS = [1, 2, 4, 8];
 const HUMAN_COMMAND_MAX_DYNAMIC_EXPANSION_ATTEMPTS = 7;
 const HUMAN_COMMAND_MAX_AUTO_PADDING_TILES = 1536;
+const ZOMBIE_SPAWN_SEARCH_RADIUS_TILES = 3;
 const DEBUG_TOGGLE_KEYS = new Set(["`", "~"]);
+const RUNTIME_MODE_ZOMBIE_WANDER = "zombie_wander";
+const RUNTIME_MODE = RUNTIME_MODE_ZOMBIE_WANDER;
+const HUMAN_SYSTEMS_ENABLED = RUNTIME_MODE !== RUNTIME_MODE_ZOMBIE_WANDER;
 
 const TILE_CORRIDOR = 1;
 const TILE_COLOR_CORRIDOR = "#1f1f1f";
@@ -170,6 +177,19 @@ function screenToWorldTileSpace(screenX, screenY, cameraTile, tilePixels, width,
     x: cameraTile.x + (screenX - width * 0.5) / tilePixels,
     y: cameraTile.y + (screenY - height * 0.5) / tilePixels,
   };
+}
+
+function resolveRendererLabel(Phaser, rendererType) {
+  if (rendererType === Phaser.WEBGL) {
+    return "WEBGL";
+  }
+  if (rendererType === Phaser.CANVAS) {
+    return "CANVAS";
+  }
+  if (Number.isFinite(rendererType)) {
+    return `TYPE_${rendererType}`;
+  }
+  return "UNKNOWN";
 }
 
 function tileColor(tile) {
@@ -305,6 +325,10 @@ function createRuntimeScene(Phaser) {
       this.humanSelectionController = null;
       this.humanCommandController = null;
       this.humanDebugOverlay = null;
+      this.zombieManager = null;
+      this.zombieDebugOverlay = null;
+      this.debugController = null;
+      this.humanCommandDebugBridge = null;
       this.debugOverlayEnabled = false;
       this.handlePointerDown = null;
       this.handlePointerMove = null;
@@ -318,38 +342,26 @@ function createRuntimeScene(Phaser) {
         streamHeightChunks: STREAM_HEIGHT_CHUNKS,
       });
       this.runtime.ensureStreamWindow();
-      this.humanController = createHumanController({
-        scene: this,
-        runtime: this.runtime,
-        moveSpeedTilesPerSecond: HUMAN_MOVE_SPEED_TILES_PER_SECOND,
-        spawnSearchRadiusTiles: HUMAN_SPAWN_SEARCH_RADIUS_TILES,
+      this.debugController = createRuntimeDebugController({
+        onVisibilityChanged: setRuntimeOverlayVisible,
+        initialEnabled: this.debugOverlayEnabled,
       });
-      this.humanSelectionController = createHumanSelectionController({
-        scene: this,
-        humanController: this.humanController,
-      });
-      this.humanCommandController = createHumanCommandController({
-        scene: this,
-        runtime: this.runtime,
-        humanController: this.humanController,
-        pathfinder: createSubTilePathfinder(),
-        maxPathNodes: HUMAN_COMMAND_MAX_PATH_NODES,
-        navPaddingExpansionFactors: HUMAN_COMMAND_NAV_PADDING_EXPANSION_FACTORS,
-        maxDynamicExpansionAttempts: HUMAN_COMMAND_MAX_DYNAMIC_EXPANSION_ATTEMPTS,
-        maxAutoPaddingTiles: HUMAN_COMMAND_MAX_AUTO_PADDING_TILES,
-      });
-      this.humanDebugOverlay = createHumanDebugOverlay({
-        scene: this,
-        runtime: this.runtime,
-        humanController: this.humanController,
-        commandController: this.humanCommandController,
-      });
-      this.humanDebugOverlay.setEnabled(this.debugOverlayEnabled);
-      this.humanCommandController.setDebugEnabled(this.debugOverlayEnabled);
-
-      this.handlePointerDown = (pointer) => {
-        if (pointer.button === 0 && pointer.event?.ctrlKey) {
-          pointer.event.preventDefault();
+      if (!HUMAN_SYSTEMS_ENABLED) {
+        this.zombieManager = createZombieManager({
+          scene: this,
+          runtime: this.runtime,
+          spawnSearchRadiusTiles: ZOMBIE_SPAWN_SEARCH_RADIUS_TILES,
+        });
+        this.zombieDebugOverlay = createZombieDebugOverlay({
+          scene: this,
+          runtime: this.runtime,
+          zombieManager: this.zombieManager,
+        });
+        this.debugController.addRenderer(this.zombieDebugOverlay);
+        this.handlePointerDown = (pointer) => {
+          if (pointer.button !== 0) {
+            return;
+          }
           const cameraTile = this.runtime.getCameraTilePosition();
           const world = screenToWorldTileSpace(
             pointer.x,
@@ -359,35 +371,92 @@ function createRuntimeScene(Phaser) {
             this.scale.width,
             this.scale.height
           );
-          const commandResult = this.humanCommandController?.issueMoveCommand(
-            world.x,
-            world.y
-          );
-          if (
-            commandResult &&
-            (commandResult.accepted || commandResult.reason !== "not_selected")
-          ) {
+          const spawnResult = this.zombieManager?.spawnAtWorld(world.x, world.y);
+          if (spawnResult?.accepted) {
             this.dirty = true;
           }
-          return;
-        }
-        if (this.humanSelectionController) {
-          this.humanSelectionController.onPointerDown(pointer);
-        }
-      };
-      this.handlePointerMove = (pointer) => {
-        if (this.humanSelectionController) {
-          this.humanSelectionController.onPointerMove(pointer);
-        }
-      };
-      this.handlePointerUp = (pointer) => {
-        if (this.humanSelectionController) {
-          this.humanSelectionController.onPointerUp(pointer);
-        }
-      };
-      this.input.on("pointerdown", this.handlePointerDown);
-      this.input.on("pointermove", this.handlePointerMove);
-      this.input.on("pointerup", this.handlePointerUp);
+        };
+        this.input.on("pointerdown", this.handlePointerDown);
+      }
+      if (HUMAN_SYSTEMS_ENABLED) {
+        this.humanController = createHumanController({
+          scene: this,
+          runtime: this.runtime,
+          moveSpeedTilesPerSecond: HUMAN_MOVE_SPEED_TILES_PER_SECOND,
+          spawnSearchRadiusTiles: HUMAN_SPAWN_SEARCH_RADIUS_TILES,
+        });
+        this.humanSelectionController = createHumanSelectionController({
+          scene: this,
+          humanController: this.humanController,
+        });
+        this.humanCommandController = createHumanCommandController({
+          scene: this,
+          runtime: this.runtime,
+          humanController: this.humanController,
+          pathfinder: createSubTilePathfinder(),
+          maxPathNodes: HUMAN_COMMAND_MAX_PATH_NODES,
+          navPaddingExpansionFactors: HUMAN_COMMAND_NAV_PADDING_EXPANSION_FACTORS,
+          maxDynamicExpansionAttempts: HUMAN_COMMAND_MAX_DYNAMIC_EXPANSION_ATTEMPTS,
+          maxAutoPaddingTiles: HUMAN_COMMAND_MAX_AUTO_PADDING_TILES,
+        });
+        this.humanDebugOverlay = createHumanDebugOverlay({
+          scene: this,
+          runtime: this.runtime,
+          humanController: this.humanController,
+          commandController: this.humanCommandController,
+        });
+        this.humanCommandDebugBridge = {
+          setEnabled: (enabled) => {
+            if (this.humanCommandController) {
+              this.humanCommandController.setDebugEnabled(enabled);
+            }
+          },
+        };
+        this.debugController.addRenderer(this.humanDebugOverlay);
+        this.debugController.addRenderer(this.humanCommandDebugBridge);
+
+        this.handlePointerDown = (pointer) => {
+          if (pointer.button === 0 && pointer.event?.ctrlKey) {
+            pointer.event.preventDefault();
+            const cameraTile = this.runtime.getCameraTilePosition();
+            const world = screenToWorldTileSpace(
+              pointer.x,
+              pointer.y,
+              cameraTile,
+              this.tilePixels,
+              this.scale.width,
+              this.scale.height
+            );
+            const commandResult = this.humanCommandController?.issueMoveCommand(
+              world.x,
+              world.y
+            );
+            if (
+              commandResult &&
+              (commandResult.accepted || commandResult.reason !== "not_selected")
+            ) {
+              this.dirty = true;
+            }
+            return;
+          }
+          if (this.humanSelectionController) {
+            this.humanSelectionController.onPointerDown(pointer);
+          }
+        };
+        this.handlePointerMove = (pointer) => {
+          if (this.humanSelectionController) {
+            this.humanSelectionController.onPointerMove(pointer);
+          }
+        };
+        this.handlePointerUp = (pointer) => {
+          if (this.humanSelectionController) {
+            this.humanSelectionController.onPointerUp(pointer);
+          }
+        };
+        this.input.on("pointerdown", this.handlePointerDown);
+        this.input.on("pointermove", this.handlePointerMove);
+        this.input.on("pointerup", this.handlePointerUp);
+      }
 
       this.cameras.main.setBackgroundColor("#101015");
       this.cameras.main.roundPixels = true;
@@ -407,14 +476,12 @@ function createRuntimeScene(Phaser) {
           return;
         }
         event.preventDefault();
-        this.debugOverlayEnabled = !this.debugOverlayEnabled;
-        if (this.humanDebugOverlay) {
-          this.humanDebugOverlay.setEnabled(this.debugOverlayEnabled);
+        if (this.debugController) {
+          this.debugOverlayEnabled = this.debugController.toggle();
+        } else {
+          this.debugOverlayEnabled = !this.debugOverlayEnabled;
+          setRuntimeOverlayVisible(this.debugOverlayEnabled);
         }
-        if (this.humanCommandController) {
-          this.humanCommandController.setDebugEnabled(this.debugOverlayEnabled);
-        }
-        setRuntimeOverlayVisible(this.debugOverlayEnabled);
         this.dirty = true;
       };
       this.input.keyboard.on("keydown", this.handleDebugKeyDown);
@@ -473,14 +540,21 @@ function createRuntimeScene(Phaser) {
           this.humanCommandController.destroy();
           this.humanCommandController = null;
         }
-        if (this.humanDebugOverlay) {
-          this.humanDebugOverlay.destroy();
-          this.humanDebugOverlay = null;
-        }
         if (this.humanController) {
           this.humanController.destroy();
           this.humanController = null;
         }
+        if (this.zombieManager) {
+          this.zombieManager.destroy();
+          this.zombieManager = null;
+        }
+        if (this.debugController) {
+          this.debugController.destroy();
+          this.debugController = null;
+        }
+        this.humanDebugOverlay = null;
+        this.zombieDebugOverlay = null;
+        this.humanCommandDebugBridge = null;
         this.chunkImages.clear();
         this.chunkTextures.clear();
       });
@@ -540,6 +614,9 @@ function createRuntimeScene(Phaser) {
         this.dirty = true;
       }
       if (this.humanCommandController && this.humanCommandController.update(dt)) {
+        this.dirty = true;
+      }
+      if (this.zombieManager && this.zombieManager.update(dt)) {
         this.dirty = true;
       }
 
@@ -722,8 +799,16 @@ function createRuntimeScene(Phaser) {
           viewHeightPx: height,
         });
       }
-      if (this.humanDebugOverlay) {
-        this.humanDebugOverlay.renderFrame({
+      if (this.debugController) {
+        this.debugController.renderFrame({
+          cameraTile: snapshot.cameraTile,
+          tilePixels: this.tilePixels,
+          viewWidthPx: width,
+          viewHeightPx: height,
+        });
+      }
+      if (this.zombieManager) {
+        this.zombieManager.syncToView({
           cameraTile: snapshot.cameraTile,
           tilePixels: this.tilePixels,
           viewWidthPx: width,
@@ -744,8 +829,10 @@ function createRuntimeScene(Phaser) {
         zoomTilePixels: this.tilePixels,
       });
       if (metaElement) {
+        const rendererType = this.game?.renderer?.type;
+        const rendererLabel = resolveRendererLabel(Phaser, rendererType);
         metaElement.textContent +=
-          ` | Pending chunk textures: ${pendingChunkTextures} | Phaser: ${Phaser.VERSION}`;
+          ` | Renderer: ${rendererLabel} | Pending chunk textures: ${pendingChunkTextures} | Phaser: ${Phaser.VERSION}`;
       }
     }
   };
