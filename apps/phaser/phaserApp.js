@@ -13,8 +13,8 @@ import { createHumanDebugOverlay } from "./debug/humanDebugOverlay.js";
 import { createFirstContactDiagnosticsPanel } from "./debug/firstContactDiagnosticsPanel.js";
 import { createRuntimeDebugController } from "./debug/runtimeDebugController.js";
 import { createZombieDebugOverlay } from "./debug/zombieDebugOverlay.js";
-import { createHumanController } from "./human/humanController.js";
 import { createHumanCommandController } from "./human/humanCommandController.js";
+import { createHumanManager } from "./human/humanManager.js";
 import { createHumanSelectionController } from "./human/humanSelectionController.js";
 import { createAgentHpBarOverlay } from "./ui/agentHpBarOverlay.js";
 import { createGameOverOverlay } from "./ui/gameOverOverlay.js";
@@ -66,6 +66,17 @@ const FIRST_CONTACT_ZOMBIE_MOVE_SPEED_TILES_PER_SECOND =
 const FIRST_CONTACT_ZOMBIE_TARGET_COUNT = 100;
 const FIRST_CONTACT_ZOMBIE_MIN_SPAWN_RADIUS_TILES = 10;
 const FIRST_CONTACT_ZOMBIE_MAX_SPAWN_RADIUS_TILES = 100;
+const FIRST_CONTACT_GUEST_TARGET_RATIO_OF_ZOMBIES = 0.1;
+const FIRST_CONTACT_GUEST_TARGET_COUNT = Math.max(
+  0,
+  Math.floor(
+    FIRST_CONTACT_ZOMBIE_TARGET_COUNT * FIRST_CONTACT_GUEST_TARGET_RATIO_OF_ZOMBIES
+  )
+);
+const FIRST_CONTACT_GUEST_MIN_SPAWN_RADIUS_TILES =
+  FIRST_CONTACT_ZOMBIE_MIN_SPAWN_RADIUS_TILES;
+const FIRST_CONTACT_GUEST_MAX_SPAWN_RADIUS_TILES =
+  FIRST_CONTACT_ZOMBIE_MAX_SPAWN_RADIUS_TILES;
 const DEBUG_TOGGLE_KEYS = new Set(["`", "~"]);
 const RUNTIME_MODE_ZOMBIE_WANDER = "zombie_wander";
 const RUNTIME_MODE_FIRST_CONTACT = "first_contact";
@@ -336,6 +347,7 @@ function createRuntimeScene(Phaser) {
       this.lastZoomInputAtMs = -Infinity;
       this.pendingChunkTextures = 0;
       this.humanController = null;
+      this.humanManager = null;
       this.humanSelectionController = null;
       this.humanCommandController = null;
       this.humanDebugOverlay = null;
@@ -365,20 +377,113 @@ function createRuntimeScene(Phaser) {
         initialEnabled: this.debugOverlayEnabled,
       });
       if (HUMAN_SYSTEMS_ENABLED) {
-        this.humanController = createHumanController({
+        const getZombiePerceptionTargets = () => {
+          if (
+            !this.zombieManager ||
+            typeof this.zombieManager.getDebugState !== "function"
+          ) {
+            return [];
+          }
+          const zombieDebug = this.zombieManager.getDebugState();
+          const zombies = Array.isArray(zombieDebug?.zombies) ? zombieDebug.zombies : [];
+          const targets = [];
+          for (const zombie of zombies) {
+            const world = zombie?.worldPosition || null;
+            const health = zombie?.health || null;
+            if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
+              continue;
+            }
+            if (health?.isDead === true) {
+              continue;
+            }
+            targets.push({
+              id: zombie?.id,
+              world: {
+                x: world.x,
+                y: world.y,
+              },
+            });
+          }
+          return targets;
+        };
+        const naturalGuestPolicy =
+          RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+            ? {
+                enabled: true,
+                targetGuestCount: FIRST_CONTACT_GUEST_TARGET_COUNT,
+                minSpawnRadiusTiles: FIRST_CONTACT_GUEST_MIN_SPAWN_RADIUS_TILES,
+                maxSpawnRadiusTiles: FIRST_CONTACT_GUEST_MAX_SPAWN_RADIUS_TILES,
+                getPerimeterAnchors: () => {
+                  if (!this.humanManager) {
+                    return [];
+                  }
+                  const entries = this.humanManager.getHumanEntries({
+                    livingOnly: true,
+                  });
+                  const anchors = [];
+                  for (const entry of entries) {
+                    if (entry.role !== "survivor") {
+                      continue;
+                    }
+                    if (
+                      typeof entry.controller?.getCurrentWorldPosition !== "function"
+                    ) {
+                      continue;
+                    }
+                    const world = entry.controller.getCurrentWorldPosition();
+                    if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
+                      continue;
+                    }
+                    anchors.push({
+                      x: world.x,
+                      y: world.y,
+                    });
+                  }
+                  return anchors;
+                },
+              }
+            : null;
+        const guestPerceptionPolicy =
+          RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+            ? {
+                enabled: true,
+                lineCheckStepTiles: 0.2,
+                getTargets: getZombiePerceptionTargets,
+              }
+            : null;
+        const guestBehaviorPolicy =
+          RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+            ? {
+                fleeReplanSeconds: 0.35,
+                wanderReplanSeconds: 1.1,
+              }
+            : null;
+        this.humanManager = createHumanManager({
           scene: this,
           runtime: this.runtime,
           moveSpeedTilesPerSecond: HUMAN_MOVE_SPEED_TILES_PER_SECOND,
           spawnSearchRadiusTiles: HUMAN_SPAWN_SEARCH_RADIUS_TILES,
+          naturalGuestPolicy,
+          guestPerceptionPolicy,
+          guestBehaviorPolicy,
         });
+        this.humanController = this.humanManager.getPrimaryHumanController();
         this.humanSelectionController = createHumanSelectionController({
           scene: this,
           humanController: this.humanController,
+          getHumanControllers: () =>
+            this.humanManager
+              ? this.humanManager.getHumanControllers({ livingOnly: true })
+              : [],
         });
         this.humanCommandController = createHumanCommandController({
           scene: this,
           runtime: this.runtime,
           humanController: this.humanController,
+          getSelectedHumanControllers: () =>
+            this.humanSelectionController
+              ? this.humanSelectionController.getSelectedControllers()
+              : [],
           pathfinder: createSubTilePathfinder(),
           maxPathNodes: HUMAN_COMMAND_MAX_PATH_NODES,
           navPaddingExpansionFactors: HUMAN_COMMAND_NAV_PADDING_EXPANSION_FACTORS,
@@ -388,8 +493,11 @@ function createRuntimeScene(Phaser) {
         this.humanDebugOverlay = createHumanDebugOverlay({
           scene: this,
           runtime: this.runtime,
+          humanManager: this.humanManager,
           humanController: this.humanController,
           commandController: this.humanCommandController,
+          renderBackdrop: !ZOMBIE_SYSTEMS_ENABLED,
+          renderCollisionObstacles: !ZOMBIE_SYSTEMS_ENABLED,
         });
         this.humanCommandDebugBridge = {
           setEnabled: (enabled) => {
@@ -404,49 +512,46 @@ function createRuntimeScene(Phaser) {
 
       if (ZOMBIE_SYSTEMS_ENABLED) {
         const getFirstContactHumanTargets = () => {
-          if (!this.humanController) {
+          if (!this.humanManager) {
             return [];
           }
-          if (
-            typeof this.humanController.isDead === "function" &&
-            this.humanController.isDead()
-          ) {
-            return [];
-          }
-          if (
-            typeof this.humanController.getCurrentWorldPosition !== "function"
-          ) {
-            return [];
-          }
-          const world = this.humanController.getCurrentWorldPosition();
-          if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
-            return [];
-          }
-          const bounds =
-            typeof this.humanController.getBoundsWorld === "function"
-              ? this.humanController.getBoundsWorld()
-              : null;
-          const touchRadiusTiles = Number.isFinite(bounds?.w) && Number.isFinite(bounds?.h)
-            ? Math.max(0.01, Math.min(bounds.w, bounds.h) * 0.5)
-            : 0.29;
-          return [
-            {
-              id: "human_primary",
+          const entries = this.humanManager.getHumanEntries({ livingOnly: true });
+          const targets = [];
+          for (const entry of entries) {
+            const humanController = entry.controller;
+            if (typeof humanController?.getCurrentWorldPosition !== "function") {
+              continue;
+            }
+            const world = humanController.getCurrentWorldPosition();
+            if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
+              continue;
+            }
+            const bounds =
+              typeof humanController.getBoundsWorld === "function"
+                ? humanController.getBoundsWorld()
+                : null;
+            const touchRadiusTiles =
+              Number.isFinite(bounds?.w) && Number.isFinite(bounds?.h)
+                ? Math.max(0.01, Math.min(bounds.w, bounds.h) * 0.5)
+                : 0.29;
+            targets.push({
+              id: entry.id,
               world: {
                 x: world.x,
                 y: world.y,
               },
               touchRadiusTiles,
               isDead: () =>
-                typeof this.humanController.isDead === "function"
-                  ? this.humanController.isDead()
+                typeof humanController.isDead === "function"
+                  ? humanController.isDead()
                   : false,
               applyDamage: (amount) =>
-                typeof this.humanController.applyDamage === "function"
-                  ? this.humanController.applyDamage(amount)
+                typeof humanController.applyDamage === "function"
+                  ? humanController.applyDamage(amount)
                   : { changed: false, becameDead: false },
-            },
-          ];
+            });
+          }
+          return targets;
         };
         const firstContactPolicy =
           RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
@@ -507,6 +612,7 @@ function createRuntimeScene(Phaser) {
 
       this.agentHpBarOverlay = createAgentHpBarOverlay({
         scene: this,
+        humanManager: this.humanManager,
         humanController: this.humanController,
         zombieManager: this.zombieManager,
       });
@@ -517,7 +623,9 @@ function createRuntimeScene(Phaser) {
       if (RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT && runtimeOverlayElement) {
         this.firstContactDiagnosticsPanel = createFirstContactDiagnosticsPanel({
           parentElement: runtimeOverlayElement,
+          humanManager: this.humanManager,
           humanController: this.humanController,
+          humanCommandController: this.humanCommandController,
           zombieManager: this.zombieManager,
           getGameOverActive: () => this.gameOverActive,
         });
@@ -670,8 +778,11 @@ function createRuntimeScene(Phaser) {
           this.humanCommandController.destroy();
           this.humanCommandController = null;
         }
+        if (this.humanManager) {
+          this.humanManager.destroy();
+          this.humanManager = null;
+        }
         if (this.humanController) {
-          this.humanController.destroy();
           this.humanController = null;
         }
         if (this.zombieManager) {
@@ -749,7 +860,7 @@ function createRuntimeScene(Phaser) {
         this.dirty = true;
       }
 
-      if (this.humanController && this.humanController.update(dt)) {
+      if (this.humanManager && this.humanManager.update(dt)) {
         this.dirty = true;
       }
       if (this.humanCommandController && this.humanCommandController.update(dt)) {
@@ -759,10 +870,11 @@ function createRuntimeScene(Phaser) {
         this.dirty = true;
       }
 
-      const livingHumanCount =
-        this.humanController &&
-        typeof this.humanController.isDead === "function" &&
-        !this.humanController.isDead()
+      const livingHumanCount = this.humanManager
+        ? this.humanManager.getLivingHumanCount()
+        : this.humanController &&
+            typeof this.humanController.isDead === "function" &&
+            !this.humanController.isDead()
           ? 1
           : 0;
       const shouldShowGameOver = livingHumanCount <= 0;
@@ -933,8 +1045,8 @@ function createRuntimeScene(Phaser) {
       this.chunkBorderGraphics.lineTo(width / 2, height / 2 + 12);
       this.chunkBorderGraphics.strokePath();
 
-      if (this.humanController) {
-        this.humanController.syncToView({
+      if (this.humanManager) {
+        this.humanManager.syncToView({
           cameraTile: snapshot.cameraTile,
           tilePixels: this.tilePixels,
           viewWidthPx: width,

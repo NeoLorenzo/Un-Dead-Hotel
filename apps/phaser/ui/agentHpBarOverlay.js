@@ -126,6 +126,7 @@ function drawZombieCooldownBar(overlay, hpRect, attackState) {
 
 export function createAgentHpBarOverlay({
   scene,
+  humanManager = null,
   humanController = null,
   zombieManager = null,
 } = {}) {
@@ -135,24 +136,50 @@ export function createAgentHpBarOverlay({
   const overlay = scene.add.graphics();
   overlay.setDepth(96);
 
+  function collectHumanDebugStates() {
+    const debugStates = [];
+    if (
+      humanManager &&
+      typeof humanManager.getHumanControllers === "function"
+    ) {
+      const controllers = humanManager.getHumanControllers();
+      for (const controller of controllers) {
+        if (typeof controller?.getDebugState !== "function") {
+          continue;
+        }
+        const debug = controller.getDebugState();
+        if (debug) {
+          debugStates.push(debug);
+        }
+      }
+      return debugStates;
+    }
+    if (humanController && typeof humanController.getDebugState === "function") {
+      const debug = humanController.getDebugState();
+      if (debug) {
+        debugStates.push(debug);
+      }
+    }
+    return debugStates;
+  }
+
   function drawHumanBars(viewState) {
-    if (!humanController || typeof humanController.getDebugState !== "function") {
-      return;
+    const humanDebugStates = collectHumanDebugStates();
+    for (const humanDebug of humanDebugStates) {
+      const health = humanDebug?.health;
+      const world = humanDebug?.worldPosition;
+      if (!health || !world) {
+        continue;
+      }
+      drawHpBar(overlay, {
+        worldX: world.x,
+        worldY: world.y,
+        currentHp: health.currentHp,
+        maxHp: health.maxHp,
+        color: HUMAN_HP_COLOR,
+        ...viewState,
+      });
     }
-    const humanDebug = humanController.getDebugState();
-    const health = humanDebug?.health;
-    const world = humanDebug?.worldPosition;
-    if (!health || !world) {
-      return;
-    }
-    drawHpBar(overlay, {
-      worldX: world.x,
-      worldY: world.y,
-      currentHp: health.currentHp,
-      maxHp: health.maxHp,
-      color: HUMAN_HP_COLOR,
-      ...viewState,
-    });
   }
 
   function drawZombieBars(viewState) {

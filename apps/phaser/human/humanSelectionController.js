@@ -24,13 +24,14 @@ function rectChanged(a, b) {
 
 export function createHumanSelectionController({
   scene,
-  humanController,
+  humanController = null,
+  getHumanControllers = null,
   onSelectionChanged = null,
   dragThresholdPx = DRAG_THRESHOLD_PX,
 } = {}) {
-  if (!scene || !humanController) {
+  if (!scene || (!humanController && typeof getHumanControllers !== "function")) {
     throw new Error(
-      "createHumanSelectionController requires scene and humanController."
+      "createHumanSelectionController requires scene and a human provider."
     );
   }
 
@@ -45,19 +46,189 @@ export function createHumanSelectionController({
   let currentX = 0;
   let currentY = 0;
   let lastRect = null;
+  let shiftHeldAtPointerDown = false;
+  const selectedControllers = new Set();
 
-  function applySelection(nextSelected) {
-    const wasSelected = humanController.isSelected();
-    if (nextSelected) {
-      humanController.select();
-    } else {
-      humanController.deselect();
+  function getControllersSnapshot() {
+    const source =
+      typeof getHumanControllers === "function"
+        ? getHumanControllers()
+        : humanController
+          ? [humanController]
+          : [];
+    if (!Array.isArray(source)) {
+      return [];
     }
-    const changed = wasSelected !== nextSelected;
-    if (changed && typeof onSelectionChanged === "function") {
-      onSelectionChanged(nextSelected);
+    const out = [];
+    const seen = new Set();
+    for (const controller of source) {
+      if (!controller || seen.has(controller)) {
+        continue;
+      }
+      seen.add(controller);
+      out.push(controller);
+    }
+    return out;
+  }
+
+  function isControllerSelectable(controller) {
+    if (!controller) {
+      return false;
+    }
+    const selectable =
+      typeof controller.isSelectable === "function"
+        ? controller.isSelectable()
+        : true;
+    if (!selectable) {
+      return false;
+    }
+    if (typeof controller.isDead === "function" && controller.isDead()) {
+      return false;
+    }
+    return true;
+  }
+
+  function setControllerSelected(controller, nextSelected) {
+    if (!controller) {
+      return false;
+    }
+    const wasSelected = selectedControllers.has(controller);
+    const shouldSelect = nextSelected && isControllerSelectable(controller);
+    if (wasSelected === shouldSelect) {
+      return false;
+    }
+    if (shouldSelect) {
+      selectedControllers.add(controller);
+      if (typeof controller.select === "function") {
+        controller.select();
+      }
+    } else {
+      selectedControllers.delete(controller);
+      if (typeof controller.deselect === "function") {
+        controller.deselect();
+      }
+    }
+    return true;
+  }
+
+  function emitSelectionChanged() {
+    if (typeof onSelectionChanged === "function") {
+      onSelectionChanged(getSelectedControllers());
+    }
+  }
+
+  function pruneSelection() {
+    const available = new Set(getControllersSnapshot());
+    let changed = false;
+    for (const controller of selectedControllers) {
+      if (!available.has(controller) || !isControllerSelectable(controller)) {
+        selectedControllers.delete(controller);
+        if (typeof controller?.deselect === "function") {
+          controller.deselect();
+        }
+        changed = true;
+      }
     }
     return changed;
+  }
+
+  function clearSelection() {
+    let changed = false;
+    for (const controller of [...selectedControllers]) {
+      changed = setControllerSelected(controller, false) || changed;
+    }
+    if (changed) {
+      emitSelectionChanged();
+    }
+    return changed;
+  }
+
+  function setSelectionSet(nextControllers) {
+    const target = new Set();
+    if (Array.isArray(nextControllers)) {
+      for (const controller of nextControllers) {
+        if (isControllerSelectable(controller)) {
+          target.add(controller);
+        }
+      }
+    }
+
+    let changed = false;
+    for (const controller of [...selectedControllers]) {
+      if (!target.has(controller)) {
+        changed = setControllerSelected(controller, false) || changed;
+      }
+    }
+    for (const controller of target) {
+      changed = setControllerSelected(controller, true) || changed;
+    }
+    if (changed) {
+      emitSelectionChanged();
+    }
+    return changed;
+  }
+
+  function addSelectionSet(addControllers) {
+    let changed = false;
+    if (Array.isArray(addControllers)) {
+      for (const controller of addControllers) {
+        changed = setControllerSelected(controller, true) || changed;
+      }
+    }
+    if (changed) {
+      emitSelectionChanged();
+    }
+    return changed;
+  }
+
+  function toggleControllerSelection(controller) {
+    const changed = setControllerSelected(
+      controller,
+      !selectedControllers.has(controller)
+    );
+    if (changed) {
+      emitSelectionChanged();
+    }
+    return changed;
+  }
+
+  function findControllerAtPoint(screenX, screenY) {
+    const controllers = getControllersSnapshot();
+    for (let i = controllers.length - 1; i >= 0; i -= 1) {
+      const controller = controllers[i];
+      if (!isControllerSelectable(controller)) {
+        continue;
+      }
+      if (typeof controller.containsScreenPoint !== "function") {
+        continue;
+      }
+      if (controller.containsScreenPoint(screenX, screenY)) {
+        return controller;
+      }
+    }
+    return null;
+  }
+
+  function getControllersInRect(rect) {
+    const out = [];
+    const controllers = getControllersSnapshot();
+    for (const controller of controllers) {
+      if (!isControllerSelectable(controller)) {
+        continue;
+      }
+      if (typeof controller.intersectsScreenRect !== "function") {
+        continue;
+      }
+      if (controller.intersectsScreenRect(rect)) {
+        out.push(controller);
+      }
+    }
+    return out;
+  }
+
+  function getSelectedControllers() {
+    pruneSelection();
+    return [...selectedControllers];
   }
 
   function drawOverlay() {
@@ -90,7 +261,9 @@ export function createHumanSelectionController({
     startY = pointer.y;
     currentX = pointer.x;
     currentY = pointer.y;
+    shiftHeldAtPointerDown = pointer.event?.shiftKey === true;
     lastRect = null;
+    pruneSelection();
     drawOverlay();
     return true;
   }
@@ -129,23 +302,41 @@ export function createHumanSelectionController({
     dragging = false;
     activePointerId = null;
     lastRect = null;
+    pruneSelection();
 
     let selectionChanged = false;
     if (wasDragging) {
       const rect = normalizedRect(startX, startY, currentX, currentY);
       if (rect.w < dragThresholdPx && rect.h < dragThresholdPx) {
-        selectionChanged = applySelection(
-          humanController.containsScreenPoint(currentX, currentY)
-        );
+        const hit = findControllerAtPoint(currentX, currentY);
+        if (shiftHeldAtPointerDown) {
+          if (hit) {
+            selectionChanged = toggleControllerSelection(hit);
+          }
+        } else if (hit) {
+          selectionChanged = setSelectionSet([hit]);
+        } else {
+          selectionChanged = clearSelection();
+        }
       } else {
-        selectionChanged = applySelection(
-          humanController.intersectsScreenRect(rect)
-        );
+        const hits = getControllersInRect(rect);
+        if (shiftHeldAtPointerDown) {
+          selectionChanged = addSelectionSet(hits);
+        } else {
+          selectionChanged = setSelectionSet(hits);
+        }
       }
     } else {
-      selectionChanged = applySelection(
-        humanController.containsScreenPoint(currentX, currentY)
-      );
+      const hit = findControllerAtPoint(currentX, currentY);
+      if (shiftHeldAtPointerDown) {
+        if (hit) {
+          selectionChanged = toggleControllerSelection(hit);
+        }
+      } else if (hit) {
+        selectionChanged = setSelectionSet([hit]);
+      } else {
+        selectionChanged = clearSelection();
+      }
     }
 
     drawOverlay();
@@ -153,10 +344,12 @@ export function createHumanSelectionController({
   }
 
   function updateOverlay() {
+    pruneSelection();
     drawOverlay();
   }
 
   function destroy() {
+    clearSelection();
     overlay.clear();
     overlay.destroy();
   }
@@ -165,6 +358,9 @@ export function createHumanSelectionController({
     onPointerDown,
     onPointerMove,
     onPointerUp,
+    getSelectedControllers,
+    getSelectedCount: () => getSelectedControllers().length,
+    clearSelection,
     updateOverlay,
     destroy,
   };

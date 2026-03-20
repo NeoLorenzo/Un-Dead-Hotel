@@ -38,12 +38,17 @@ The procedural generation system is deterministic by chunk coordinate and world 
 
 Current game runtime gameplay slice includes:
 
-- one controllable human agent with geometry-based world-space movement/collision,
-- left-click and drag-box human selection,
-- `Ctrl + Left Click` world-space move command using sub-tile bidirectional A* with:
+- multi-human roster with one player `survivor` plus naturally spawned `guests`,
+- survivor/guest visual differentiation and survivor-only direct selection policy,
+- guest natural population policy anchored to living survivors (`1:10` static ratio from zombie target count),
+- guest vision/perception loop (cone + line-of-sight) with wander/flee behavior,
+- survivor-touch conversion (guest becomes survivor and immediately becomes selectable),
+- left-click/drag-box survivor selection with `Shift + Left Click` toggle support,
+- `Ctrl + Left Click` group move command for selected survivors using sub-tile bidirectional A* with:
   - 8-direction pathing (cardinal + diagonal),
   - corner-cut prevention for diagonal movement,
   - boundary-aware directional retry expansion,
+  - unique quarter-tile destination claiming per survivor,
 - first-contact zombie population policy:
   - startup target of `100` zombies,
   - spawn band constrained to `10-100` tiles from the first human,
@@ -55,7 +60,7 @@ Current game runtime gameplay slice includes:
   - zombie speed fixed at `50%` of human speed,
 - always-visible HP bars for human and zombies with zombie cooldown bars,
 - game-over overlay when no humans remain (simulation continues),
-- backquote-toggle debug mode for path/collider/AI diagnostics,
+- backquote-toggle debug mode for path/collider/AI diagnostics (human + zombie overlays and text diagnostics),
 - zoom pipeline guardrails that keep zoom feel intact while reducing high-zoom render lag (documented in `GAME_RUNTIME.md`).
 
 ## Core Setting

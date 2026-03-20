@@ -14,6 +14,21 @@ const HUMAN_ALIVE_TINT = 0xffffff;
 const DEFAULT_MOVE_SPEED_TILES_PER_SECOND = 2.3;
 const DEFAULT_SPAWN_SEARCH_RADIUS_TILES = 10;
 const DEFAULT_HUMAN_MAX_HP = DEFAULT_AGENT_MAX_HP;
+const HUMAN_VISION_CONE_ANGLE_DEGREES = 90;
+const HUMAN_VISION_CONE_RANGE_TILES = 8;
+const DEFAULT_HUMAN_ROLE = "survivor";
+const DEFAULT_HEAD_COLOR = 0xe8c8aa;
+const DEFAULT_OUTLINE_COLOR = 0x122017;
+const ROLE_SURVIVOR = "survivor";
+const ROLE_GUEST = "guest";
+const ROLE_STYLE_DEFAULTS = {
+  [ROLE_SURVIVOR]: {
+    clothingColor: 0x315a3a,
+  },
+  [ROLE_GUEST]: {
+    clothingColor: 0x37629a,
+  },
+};
 const ARRIVAL_RADIUS_TILES = 0.09;
 const MIN_MOVEMENT_DISTANCE_TILES = 0.001;
 const COLLISION_RESOLVE_STEP_TILES = 0.12;
@@ -39,7 +54,43 @@ function normalizeWorldPoint(point) {
   };
 }
 
-function buildHumanTexture(scene, textureKey) {
+function normalizeAngleRadians(angleRadians) {
+  let angle = Number(angleRadians) || 0;
+  while (angle > Math.PI) {
+    angle -= Math.PI * 2;
+  }
+  while (angle < -Math.PI) {
+    angle += Math.PI * 2;
+  }
+  return angle;
+}
+
+function normalizeRole(role) {
+  return role === ROLE_GUEST ? ROLE_GUEST : ROLE_SURVIVOR;
+}
+
+function normalizeColor(color, fallback) {
+  const numeric = Number(color);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(0xffffff, Math.floor(numeric)));
+}
+
+function normalizeVisualStyle(role, style) {
+  const roleDefaults =
+    ROLE_STYLE_DEFAULTS[normalizeRole(role)] || ROLE_STYLE_DEFAULTS[DEFAULT_HUMAN_ROLE];
+  return {
+    clothingColor: normalizeColor(style?.clothingColor, roleDefaults.clothingColor),
+  };
+}
+
+function createTextureKeyFromStyle(style) {
+  const clothing = style.clothingColor.toString(16).padStart(6, "0");
+  return `${HUMAN_TEXTURE_KEY}-${clothing}`;
+}
+
+function buildHumanTexture(scene, textureKey, style) {
   if (scene.textures.exists(textureKey)) {
     return;
   }
@@ -51,13 +102,13 @@ function buildHumanTexture(scene, textureKey) {
   const headRadius = 10;
 
   g.clear();
-  g.fillStyle(0x315a3a, 1);
+  g.fillStyle(style.clothingColor, 1);
   g.fillCircle(cx, cx + 5, bodyRadius);
-  g.fillStyle(0xe8c8aa, 1);
+  g.fillStyle(DEFAULT_HEAD_COLOR, 1);
   g.fillCircle(cx, cx - 11, headRadius);
-  g.lineStyle(3, 0x122017, 1);
+  g.lineStyle(3, DEFAULT_OUTLINE_COLOR, 1);
   g.strokeCircle(cx, cx + 5, bodyRadius);
-  g.lineStyle(2, 0x122017, 1);
+  g.lineStyle(2, DEFAULT_OUTLINE_COLOR, 1);
   g.strokeCircle(cx, cx - 11, headRadius);
   g.generateTexture(textureKey, size, size);
   g.destroy();
@@ -111,6 +162,8 @@ function dedupeWorldPoints(points) {
 export function createHumanController({
   scene,
   runtime,
+  role = DEFAULT_HUMAN_ROLE,
+  visualStyle = null,
   moveSpeedTilesPerSecond = DEFAULT_MOVE_SPEED_TILES_PER_SECOND,
   spawnSearchRadiusTiles = DEFAULT_SPAWN_SEARCH_RADIUS_TILES,
   spawnTile: providedSpawnTile = null,
@@ -124,7 +177,10 @@ export function createHumanController({
     throw new Error("createHumanController requires Phaser Arcade Physics to be enabled.");
   }
 
-  buildHumanTexture(scene, HUMAN_TEXTURE_KEY);
+  let currentRole = normalizeRole(role);
+  let currentVisualStyle = normalizeVisualStyle(currentRole, visualStyle);
+  let textureKey = createTextureKeyFromStyle(currentVisualStyle);
+  buildHumanTexture(scene, textureKey, currentVisualStyle);
 
   const cameraTile = runtime.getCameraTilePosition();
   const fallbackStartTile = runtime.worldToTile(cameraTile.x, cameraTile.y);
@@ -137,7 +193,7 @@ export function createHumanController({
     preferredSpawnTile;
   const spawnWorld = runtime.tileToWorldCenter(spawnTile.x, spawnTile.y);
 
-  const sprite = scene.add.sprite(0, 0, HUMAN_TEXTURE_KEY);
+  const sprite = scene.add.sprite(0, 0, textureKey);
   sprite.setOrigin(0.5, 0.5);
   sprite.setDepth(25);
   const selectionRing = scene.add.graphics();
@@ -189,6 +245,7 @@ export function createHumanController({
   let lastScreenY = 0;
   let lastDisplaySize = 0;
   let pendingPathBlockedEvent = null;
+  let headingRadians = 0;
 
   function redrawSelectionRing() {
     selectionRing.clear();
@@ -273,17 +330,38 @@ export function createHumanController({
   function setWorldPath(nextWorldPathPoints) {
     if (health.isDead()) {
       clearPath();
-      return;
+      return false;
     }
     const sanitized = sanitizeWorldPath(nextWorldPathPoints);
     pendingPathBlockedEvent = null;
     if (sanitized.length === 0) {
       clearPath();
-      return;
+      return false;
     }
 
     pathWaypointsWorld = sanitized;
     waypointIndex = 0;
+    return true;
+  }
+
+  function setWaypointWorld(nextWaypoint) {
+    if (health.isDead()) {
+      clearPath();
+      return false;
+    }
+    if (!Number.isFinite(nextWaypoint?.x) || !Number.isFinite(nextWaypoint?.y)) {
+      clearPath();
+      return false;
+    }
+    return setWorldPath([normalizeWorldPoint(nextWaypoint)]);
+  }
+
+  function clearWaypoint() {
+    clearPath();
+  }
+
+  function hasWaypoint() {
+    return waypointIndex < pathWaypointsWorld.length;
   }
 
   function moveWithCollisionGate(dx, dy) {
@@ -373,6 +451,7 @@ export function createHumanController({
       return true;
     }
 
+    headingRadians = normalizeAngleRadians(Math.atan2(toTargetY, toTargetX));
     const maxStep = moveSpeed * dt;
     const step = Math.min(maxStep, distance);
     const stepX = (toTargetX / distance) * step;
@@ -395,6 +474,30 @@ export function createHumanController({
 
     worldVelocity.x = moveResult.dx / dt;
     worldVelocity.y = moveResult.dy / dt;
+    if (movedDistance > 0.000001) {
+      headingRadians = normalizeAngleRadians(
+        Math.atan2(moveResult.dy, moveResult.dx)
+      );
+    }
+    return true;
+  }
+
+  function nudge(deltaWorldX, deltaWorldY) {
+    if (health.isDead()) {
+      return false;
+    }
+    if (!Number.isFinite(deltaWorldX) || !Number.isFinite(deltaWorldY)) {
+      return false;
+    }
+    const moveResult = moveWithCollisionGate(deltaWorldX, deltaWorldY);
+    if (!moveResult.moved) {
+      return false;
+    }
+    const distance = Math.hypot(moveResult.dx, moveResult.dy);
+    if (distance < MIN_MOVEMENT_DISTANCE_TILES) {
+      return false;
+    }
+    headingRadians = normalizeAngleRadians(Math.atan2(moveResult.dy, moveResult.dx));
     return true;
   }
 
@@ -427,7 +530,7 @@ export function createHumanController({
   }
 
   function select() {
-    if (health.isDead()) {
+    if (!isSelectable()) {
       selected = false;
       redrawSelectionRing();
       return;
@@ -445,6 +548,35 @@ export function createHumanController({
     return selected;
   }
 
+  function isSelectable() {
+    return currentRole === ROLE_SURVIVOR && !health.isDead();
+  }
+
+  function setRole(nextRole, options = {}) {
+    const resolvedRole = normalizeRole(nextRole);
+    const nextVisualStyle = normalizeVisualStyle(resolvedRole, options.visualStyle);
+    const nextTextureKey = createTextureKeyFromStyle(nextVisualStyle);
+    if (!scene.textures.exists(nextTextureKey)) {
+      buildHumanTexture(scene, nextTextureKey, nextVisualStyle);
+    }
+
+    const roleChanged = resolvedRole !== currentRole;
+    const styleChanged =
+      nextVisualStyle.clothingColor !== currentVisualStyle.clothingColor;
+    if (!roleChanged && !styleChanged) {
+      return false;
+    }
+
+    currentRole = resolvedRole;
+    currentVisualStyle = nextVisualStyle;
+    textureKey = nextTextureKey;
+    sprite.setTexture(textureKey);
+    if (!isSelectable()) {
+      deselect();
+    }
+    return true;
+  }
+
   function getBoundsWorld() {
     return {
       x: worldPosition.x - HUMAN_COLLIDER_RADIUS_TILES,
@@ -460,8 +592,20 @@ export function createHumanController({
       worldPosition: { ...worldPosition },
       worldVelocity: { ...worldVelocity },
       moveSpeedTilesPerSecond: moveSpeed,
+      role: currentRole,
+      selectable: isSelectable(),
+      visualStyle: { ...currentVisualStyle },
       health: health.getState(),
       collider: getBoundsWorld(),
+      headingRadians,
+      visionConeAngleDegrees: HUMAN_VISION_CONE_ANGLE_DEGREES,
+      visionConeRangeTiles: HUMAN_VISION_CONE_RANGE_TILES,
+      waypointWorld: hasWaypoint()
+        ? {
+            x: pathWaypointsWorld[waypointIndex].x,
+            y: pathWaypointsWorld[waypointIndex].y,
+          }
+        : null,
       pathWorld: pathWaypointsWorld.map((point) => ({ ...point })),
       waypointIndex,
       selected,
@@ -520,6 +664,37 @@ export function createHumanController({
     return { x: worldPosition.x, y: worldPosition.y };
   }
 
+  function getWorldPosition() {
+    return getCurrentWorldPosition();
+  }
+
+  function getHeadingRadians() {
+    return headingRadians;
+  }
+
+  function setHeadingRadians(nextHeadingRadians) {
+    if (!Number.isFinite(nextHeadingRadians)) {
+      return false;
+    }
+    headingRadians = normalizeAngleRadians(nextHeadingRadians);
+    return true;
+  }
+
+  function rotateHeading(deltaRadians) {
+    if (!Number.isFinite(deltaRadians)) {
+      return false;
+    }
+    headingRadians = normalizeAngleRadians(headingRadians + deltaRadians);
+    return true;
+  }
+
+  function getVisionCone() {
+    return {
+      angleDegrees: HUMAN_VISION_CONE_ANGLE_DEGREES,
+      rangeTiles: HUMAN_VISION_CONE_RANGE_TILES,
+    };
+  }
+
   function hasActivePath() {
     return waypointIndex < pathWaypointsWorld.length;
   }
@@ -552,7 +727,9 @@ export function createHumanController({
     isSelected,
     setPath,
     setWorldPath,
+    setWaypointWorld,
     clearPath,
+    clearWaypoint,
     update,
     syncToView,
     getBoundsWorld,
@@ -562,8 +739,18 @@ export function createHumanController({
     getDebugState,
     getCurrentTile,
     getCurrentWorldPosition,
+    getWorldPosition,
+    getHeadingRadians,
+    setHeadingRadians,
+    rotateHeading,
+    getVisionCone,
     getMoveSpeedTilesPerSecond: () => moveSpeed,
+    getRole: () => currentRole,
+    isSelectable,
+    setRole,
     hasActivePath,
+    hasWaypoint,
+    nudge,
     consumePathBlockedEvent,
     getSpawnTile: () => ({ ...spawnTile }),
     getHealthState: () => health.getState(),

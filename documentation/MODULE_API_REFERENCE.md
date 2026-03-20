@@ -108,15 +108,20 @@ Returned API includes:
 
 ### `apps/phaser/human/humanController.js`
 
-- `createHumanController({ scene, runtime, moveSpeedTilesPerSecond?, spawnSearchRadiusTiles?, spawnTile?, maxHp?, currentHp? })`
+- `createHumanController({ scene, runtime, role?, visualStyle?, moveSpeedTilesPerSecond?, spawnSearchRadiusTiles?, spawnTile?, maxHp?, currentHp? })`
   - selection:
     - `select()`
     - `deselect()`
     - `isSelected()`
+    - `isSelectable()`
   - movement/path:
     - `setPath(pathTiles, options?)`
     - `setWorldPath(worldPathPoints)`
+    - `setWaypointWorld(waypointWorld)`
+    - `clearWaypoint()`
     - `clearPath()`
+    - `hasWaypoint()`
+    - `nudge(deltaWorldX, deltaWorldY)` (soft separation support)
     - `update(dtSeconds)`
   - render/sync:
     - `syncToView({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
@@ -128,10 +133,17 @@ Returned API includes:
     - `getDebugState()`
     - `getCurrentTile()`
     - `getCurrentWorldPosition()`
+    - `getWorldPosition()`
+    - `getHeadingRadians()`
+    - `setHeadingRadians(headingRadians)`
+    - `rotateHeading(deltaRadians)`
+    - `getVisionCone()`
     - `hasActivePath()`
     - `consumePathBlockedEvent()`
     - `getSpawnTile()`
     - `getMoveSpeedTilesPerSecond()`
+    - `getRole()`
+    - `setRole(role, options?)`
     - `getHealthState()`
     - `getCurrentHp()`
     - `getMaxHp()`
@@ -143,23 +155,48 @@ Returned API includes:
   - lifecycle:
     - `destroy()`
 
+### `apps/phaser/human/humanManager.js`
+
+- `createHumanManager({ scene, runtime, moveSpeedTilesPerSecond?, spawnSearchRadiusTiles?, primarySurvivorSpawnTile?, naturalGuestPolicy?, guestPerceptionPolicy?, guestBehaviorPolicy? })`
+  - roster/query:
+    - `getHumanEntries({ livingOnly? })`
+    - `getHumanControllers({ livingOnly? })`
+    - `getPrimaryHumanController()`
+    - `getPrimaryLivingHumanController()`
+    - `getLivingHumanCount()`
+  - lifecycle/update:
+    - `update(dtSeconds)`
+    - `syncToView({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
+    - `destroy()`
+  - diagnostics:
+    - `getDebugState()` (includes survivor/guest counts, guest spawn/perception/behavior/conversion diagnostics, and per-human debug payloads)
+
+### `apps/phaser/human/humanPerception.js`
+
+- `createHumanPerception({ runtime, lineCheckStepTiles? })`
+  - `evaluateVision({ observerWorld, headingRadians, coneAngleDegrees, coneRangeTiles, targets })`
+  - `getConfig()`
+
 ### `apps/phaser/human/humanSelectionController.js`
 
-- `createHumanSelectionController({ scene, humanController, onSelectionChanged?, dragThresholdPx? })`
+- `createHumanSelectionController({ scene, humanController?, getHumanControllers?, onSelectionChanged?, dragThresholdPx? })`
   - `onPointerDown(pointer)`
   - `onPointerMove(pointer)`
   - `onPointerUp(pointer)`
+  - `getSelectedControllers()`
+  - `getSelectedCount()`
+  - `clearSelection()`
   - `updateOverlay()`
   - `destroy()`
 
 ### `apps/phaser/human/humanCommandController.js`
 
-- `createHumanCommandController({ scene, runtime, humanController, pathfinder, maxPathNodes?, goalSearchRadiusTiles?, maxCommandDistanceTiles?, subTileCellSizeTiles?, navGridPaddingTiles?, navPaddingExpansionFactors?, agentRadiusTiles?, maxDynamicExpansionAttempts?, maxAutoPaddingTiles? })`
+- `createHumanCommandController({ scene, runtime, humanController?, getSelectedHumanControllers?, pathfinder, maxPathNodes?, goalSearchRadiusTiles?, maxCommandDistanceTiles?, subTileCellSizeTiles?, navGridPaddingTiles?, navPaddingExpansionFactors?, agentRadiusTiles?, startUnstickSearchRadiusTiles?, maxDynamicExpansionAttempts?, maxAutoPaddingTiles?, groupTileClaimMaxRadius? })`
   - `issueMoveCommand(pointerWorldX, pointerWorldY)`
   - `update(dtSeconds)`
   - `syncToView({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
   - `setDebugEnabled(enabled)`
-  - `getDebugState()` (includes expansion-attempt summary and per-attempt bounds/boundary metadata)
+  - `getDebugState()` (includes selected-count snapshot, last command summary, expansion-attempt summary, and per-attempt bounds/boundary metadata)
   - `destroy()`
 
 ### `apps/phaser/debug/runtimeDebugController.js`
@@ -175,7 +212,7 @@ Returned API includes:
 
 ### `apps/phaser/debug/humanDebugOverlay.js`
 
-- `createHumanDebugOverlay({ scene, runtime, humanController, commandController? })`
+- `createHumanDebugOverlay({ scene, runtime, humanManager?, humanController, commandController?, renderBackdrop?, renderCollisionObstacles? })`
   - `setEnabled(enabled)`
   - `isEnabled()`
   - `renderFrame({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
@@ -251,7 +288,7 @@ Returned API includes:
 
 ### `apps/phaser/debug/firstContactDiagnosticsPanel.js`
 
-- `createFirstContactDiagnosticsPanel({ parentElement, humanController?, zombieManager?, getGameOverActive? })`
+- `createFirstContactDiagnosticsPanel({ parentElement, humanManager?, humanController?, humanCommandController?, zombieManager?, getGameOverActive? })`
   - `setEnabled(enabled)`
   - `isEnabled()`
   - `renderFrame(frameState?)`
@@ -279,7 +316,7 @@ Returned API includes:
 
 ### `apps/phaser/ui/agentHpBarOverlay.js`
 
-- `createAgentHpBarOverlay({ scene, humanController?, zombieManager? })`
+- `createAgentHpBarOverlay({ scene, humanManager?, humanController?, zombieManager? })`
   - `renderFrame({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
   - `clear()`
   - `destroy()`

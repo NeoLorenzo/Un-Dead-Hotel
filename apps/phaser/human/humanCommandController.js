@@ -5,6 +5,7 @@ const DEFAULT_SUB_TILE_CELL_SIZE_TILES = 0.25;
 const DEFAULT_NAV_GRID_PADDING_TILES = 4;
 const DEFAULT_NAV_PADDING_EXPANSION_FACTORS = [1, 2, 4, 8];
 const DEFAULT_AGENT_RADIUS_TILES = 0.29;
+const DEFAULT_START_UNSTICK_SEARCH_RADIUS_TILES = 2;
 const DEFAULT_MAX_DYNAMIC_EXPANSION_ATTEMPTS = 12;
 const DEFAULT_MAX_AUTO_PADDING_TILES = 4096;
 const COMMAND_MIN_INTERVAL_SECONDS = 0.06;
@@ -13,6 +14,7 @@ const MARKER_GOOD_COLOR = 0x64ff8a;
 const MARKER_BAD_COLOR = 0xff5f5f;
 const MARKER_FILL_ALPHA = 0.18;
 const MARKER_STROKE_ALPHA = 0.95;
+const DEFAULT_GROUP_TILE_CLAIM_MAX_RADIUS = 24;
 
 function normalizeWorldPoint(point) {
   return {
@@ -142,6 +144,89 @@ function dedupeWorldPath(path) {
     prev = normalized;
   }
   return out;
+}
+
+function worldToSubTileCell(worldPoint, cellSizeTiles) {
+  const size = Math.max(0.05, Number(cellSizeTiles) || DEFAULT_SUB_TILE_CELL_SIZE_TILES);
+  return {
+    x: Math.floor(worldPoint.x / size),
+    y: Math.floor(worldPoint.y / size),
+  };
+}
+
+function subTileCellToWorldCenter(cellX, cellY, cellSizeTiles) {
+  const size = Math.max(0.05, Number(cellSizeTiles) || DEFAULT_SUB_TILE_CELL_SIZE_TILES);
+  return {
+    x: (cellX + 0.5) * size,
+    y: (cellY + 0.5) * size,
+  };
+}
+
+function resolveNearestWalkableWorldOnNavigationGrid(
+  navigationGrid,
+  targetWorld,
+  maxRadiusTiles
+) {
+  if (!navigationGrid) {
+    return null;
+  }
+  if (
+    typeof navigationGrid.isWalkableCell !== "function" ||
+    typeof navigationGrid.worldToCell !== "function" ||
+    typeof navigationGrid.cellToWorldCenter !== "function"
+  ) {
+    return null;
+  }
+
+  const normalizedTarget = normalizeWorldPoint(targetWorld);
+  const cellSize = Math.max(
+    0.05,
+    Number(navigationGrid.cellSizeTiles) || DEFAULT_SUB_TILE_CELL_SIZE_TILES
+  );
+  const anchorCell = navigationGrid.worldToCell(normalizedTarget.x, normalizedTarget.y);
+  if (navigationGrid.isWalkableCell(anchorCell.x, anchorCell.y)) {
+    return {
+      world: { ...normalizedTarget },
+      distance: 0,
+    };
+  }
+
+  const radiusTiles = Math.max(0, Number(maxRadiusTiles) || 0);
+  const maxRadiusCells = Math.max(1, Math.ceil(radiusTiles / cellSize));
+  let best = null;
+  for (let radius = 1; radius <= maxRadiusCells; radius += 1) {
+    const minX = anchorCell.x - radius;
+    const maxX = anchorCell.x + radius;
+    const minY = anchorCell.y - radius;
+    const maxY = anchorCell.y + radius;
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        if (
+          Math.max(Math.abs(x - anchorCell.x), Math.abs(y - anchorCell.y)) !== radius
+        ) {
+          continue;
+        }
+        if (!navigationGrid.isWalkableCell(x, y)) {
+          continue;
+        }
+        const world = navigationGrid.cellToWorldCenter(x, y);
+        const distance = Math.hypot(
+          world.x - normalizedTarget.x,
+          world.y - normalizedTarget.y
+        );
+        if (!best || distance < best.distance) {
+          best = {
+            world: { x: world.x, y: world.y },
+            distance,
+          };
+        }
+      }
+    }
+    if (best) {
+      return best;
+    }
+  }
+  return null;
 }
 
 function normalizePositiveNumberArray(values, fallback) {
@@ -376,7 +461,8 @@ function resultTouchedBoundary(result) {
 export function createHumanCommandController({
   scene,
   runtime,
-  humanController,
+  humanController = null,
+  getSelectedHumanControllers = null,
   pathfinder,
   maxPathNodes = DEFAULT_MAX_PATH_NODES,
   goalSearchRadiusTiles = DEFAULT_GOAL_SEARCH_RADIUS_TILES,
@@ -385,12 +471,19 @@ export function createHumanCommandController({
   navGridPaddingTiles = DEFAULT_NAV_GRID_PADDING_TILES,
   navPaddingExpansionFactors = DEFAULT_NAV_PADDING_EXPANSION_FACTORS,
   agentRadiusTiles = DEFAULT_AGENT_RADIUS_TILES,
+  startUnstickSearchRadiusTiles = DEFAULT_START_UNSTICK_SEARCH_RADIUS_TILES,
   maxDynamicExpansionAttempts = DEFAULT_MAX_DYNAMIC_EXPANSION_ATTEMPTS,
   maxAutoPaddingTiles = DEFAULT_MAX_AUTO_PADDING_TILES,
+  groupTileClaimMaxRadius = DEFAULT_GROUP_TILE_CLAIM_MAX_RADIUS,
 } = {}) {
-  if (!scene || !runtime || !humanController || !pathfinder) {
+  if (!scene || !runtime || !pathfinder) {
     throw new Error(
-      "createHumanCommandController requires scene, runtime, humanController, and pathfinder."
+      "createHumanCommandController requires scene, runtime, and pathfinder."
+    );
+  }
+  if (!humanController && typeof getSelectedHumanControllers !== "function") {
+    throw new Error(
+      "createHumanCommandController requires humanController or getSelectedHumanControllers."
     );
   }
   if (typeof pathfinder.findPath !== "function") {
@@ -407,8 +500,8 @@ export function createHumanCommandController({
     DEFAULT_NAV_PADDING_EXPANSION_FACTORS
   );
 
-  let lastGoalWorld = null;
-  let repathAttemptUsed = false;
+  const lastGoalWorldByController = new Map();
+  const repathAttemptUsedByController = new Map();
   let marker = null;
   let debugEnabled = false;
   let lastPathRequest = null;
@@ -418,12 +511,54 @@ export function createHumanCommandController({
   let commandCooldownRemaining = 0;
   let queuedGoalWorld = null;
   let lastGridSummary = null;
+  let lastCommandSummary = null;
 
-  function canAcceptCommands() {
-    if (typeof humanController.isDead === "function" && humanController.isDead()) {
+  function canAcceptCommands(controller) {
+    if (!controller) {
+      return false;
+    }
+    if (typeof controller.isDead === "function" && controller.isDead()) {
+      return false;
+    }
+    if (typeof controller.isSelectable === "function" && !controller.isSelectable()) {
       return false;
     }
     return true;
+  }
+
+  function getSelectedControllers() {
+    if (typeof getSelectedHumanControllers === "function") {
+      const source = getSelectedHumanControllers();
+      if (!Array.isArray(source)) {
+        return [];
+      }
+      const out = [];
+      const seen = new Set();
+      for (const controller of source) {
+        if (!controller || seen.has(controller)) {
+          continue;
+        }
+        seen.add(controller);
+        if (!canAcceptCommands(controller)) {
+          continue;
+        }
+        out.push(controller);
+      }
+      return out;
+    }
+    if (!humanController) {
+      return [];
+    }
+    if (!canAcceptCommands(humanController)) {
+      return [];
+    }
+    if (
+      typeof humanController.isSelected === "function" &&
+      !humanController.isSelected()
+    ) {
+      return [];
+    }
+    return [humanController];
   }
 
   function showMarker(goalWorld, accepted) {
@@ -465,11 +600,74 @@ export function createHumanCommandController({
     );
   }
 
-  function computeAndAssignPath(goalWorld, allowNearestFallback = true) {
-    const startWorld = humanController.getCurrentWorldPosition();
+  function computeAndAssignPath(
+    controller,
+    goalWorld,
+    allowNearestFallback = true,
+    { suppressMarker = false } = {}
+  ) {
+    const currentWorld = controller.getCurrentWorldPosition();
+    const currentWalkable =
+      typeof runtime.isWalkableWorldPoint === "function"
+        ? runtime.isWalkableWorldPoint(
+            currentWorld.x,
+            currentWorld.y,
+            agentRadiusTiles
+          )
+        : (() => {
+            const tile = runtime.worldToTile(currentWorld.x, currentWorld.y);
+            return runtime.isWalkableTile(tile.x, tile.y);
+          })();
+    const resolvedStart =
+      currentWalkable
+        ? {
+            world: { ...currentWorld },
+            distance: 0,
+          }
+        : resolveNearestNavigableWorldPoint(
+            runtime,
+            currentWorld,
+            Math.max(
+              Number(startUnstickSearchRadiusTiles) || 0,
+              Number(subTileCellSizeTiles) || DEFAULT_SUB_TILE_CELL_SIZE_TILES
+            ),
+            agentRadiusTiles,
+            subTileCellSizeTiles
+          );
+    if (!resolvedStart) {
+      if (!suppressMarker) {
+        showMarker(goalWorld, false);
+      }
+      lastPathRequest = {
+        startWorld: { ...currentWorld },
+        resolvedStartWorld: null,
+        targetWorld: null,
+        effectiveTargetWorld: null,
+        resolvedGoalWorld: null,
+        wasGoalClamped: false,
+        wasStartAdjusted: false,
+      };
+      lastPathResult = {
+        status: "start_blocked",
+        accepted: false,
+      };
+      lastWorldPath = [];
+      lastPathDebug = null;
+      lastGridSummary = null;
+      return {
+        accepted: false,
+        reason: "start_blocked",
+      };
+    }
+    const startWorld = resolvedStart.world;
+    let wasStartAdjusted = resolvedStart.distance > 0.000001;
+    let selectedResolvedStartWorld = {
+      x: startWorld.x,
+      y: startWorld.y,
+    };
     const targetWorld = normalizeWorldPoint(goalWorld);
     const clampedTarget = clampWorldGoalByDistance(
-      startWorld,
+      currentWorld,
       targetWorld,
       maxCommandDistanceTiles
     );
@@ -483,13 +681,17 @@ export function createHumanCommandController({
     );
 
     if (!resolvedGoal) {
-      showMarker(effectiveTargetWorld, false);
+      if (!suppressMarker) {
+        showMarker(effectiveTargetWorld, false);
+      }
       lastPathRequest = {
-        startWorld: { ...startWorld },
+        startWorld: { ...currentWorld },
+        resolvedStartWorld: { ...startWorld },
         targetWorld: { ...targetWorld },
         effectiveTargetWorld: { ...effectiveTargetWorld },
         resolvedGoalWorld: null,
         wasGoalClamped: clampedTarget.wasClamped,
+        wasStartAdjusted,
       };
       lastPathResult = {
         status: "goal_blocked",
@@ -547,8 +749,40 @@ export function createHumanCommandController({
         agentRadiusTiles,
       });
 
+      const startWalkableOnGrid =
+        typeof navigationGrid.isWalkableWorld === "function"
+          ? navigationGrid.isWalkableWorld(startWorld.x, startWorld.y)
+          : (() => {
+              const cell = navigationGrid.worldToCell(startWorld.x, startWorld.y);
+              return navigationGrid.isWalkableCell(cell.x, cell.y);
+            })();
+      const gridStartResolution = startWalkableOnGrid
+        ? {
+            world: { ...startWorld },
+            distance: 0,
+          }
+        : resolveNearestWalkableWorldOnNavigationGrid(
+            navigationGrid,
+            startWorld,
+            Math.max(
+              Number(startUnstickSearchRadiusTiles) || 0,
+              Number(attemptPaddingTiles) || 0
+            )
+          );
+      const attemptStartWorld = gridStartResolution?.world
+        ? {
+            x: gridStartResolution.world.x,
+            y: gridStartResolution.world.y,
+          }
+        : {
+            x: startWorld.x,
+            y: startWorld.y,
+          };
+      const attemptStartAdjusted =
+        Number(gridStartResolution?.distance) > 0.000001;
+
       const result = pathfinder.findPath({
-        startWorld,
+        startWorld: attemptStartWorld,
         goalWorld: resolvedGoal.world,
         navigationGrid,
         maxNodes: maxPathNodes,
@@ -570,6 +804,7 @@ export function createHumanCommandController({
         cellCount: navigationGrid.cols * navigationGrid.rows,
         walkableCount: navigationGrid.walkableCount,
         blockedCount: navigationGrid.blockedCount,
+        startAdjustedForGrid: attemptStartAdjusted,
       });
 
       selectedResult = result;
@@ -578,6 +813,11 @@ export function createHumanCommandController({
       selectedExpansionFactor = attempt.expansionFactor ?? null;
       selectedExpansionMode = attempt.mode;
       selectedBounds = cloneBounds(attemptBounds);
+      selectedResolvedStartWorld = {
+        x: attemptStartWorld.x,
+        y: attemptStartWorld.y,
+      };
+      wasStartAdjusted = wasStartAdjusted || attemptStartAdjusted;
 
       if (result.status === "found" && Array.isArray(result.path)) {
         break;
@@ -621,11 +861,13 @@ export function createHumanCommandController({
     }
 
     lastPathRequest = {
-      startWorld: { ...startWorld },
+      startWorld: { ...currentWorld },
+      resolvedStartWorld: { ...selectedResolvedStartWorld },
       targetWorld: { ...targetWorld },
       effectiveTargetWorld: { ...effectiveTargetWorld },
       resolvedGoalWorld: { ...resolvedGoal.world },
       wasGoalClamped: clampedTarget.wasClamped,
+      wasStartAdjusted,
     };
     lastPathDebug = selectedResult?.debug || null;
     lastGridSummary = selectedGrid
@@ -652,7 +894,53 @@ export function createHumanCommandController({
       : null;
 
     if (selectedResult?.status !== "found" || !Array.isArray(selectedResult?.path)) {
-      showMarker(resolvedGoal.world, false);
+      const recoveryDistance = Math.hypot(
+        selectedResolvedStartWorld.x - currentWorld.x,
+        selectedResolvedStartWorld.y - currentWorld.y
+      );
+      const canRunRecoveryOnly =
+        recoveryDistance > 0.000001 &&
+        (typeof runtime.isWalkableWorldPoint !== "function" ||
+          runtime.isWalkableWorldPoint(
+            selectedResolvedStartWorld.x,
+            selectedResolvedStartWorld.y,
+            agentRadiusTiles
+          ));
+      if (canRunRecoveryOnly) {
+        controller.setWorldPath([
+          {
+            x: selectedResolvedStartWorld.x,
+            y: selectedResolvedStartWorld.y,
+          },
+        ]);
+        lastGoalWorldByController.set(controller, { ...selectedResolvedStartWorld });
+        repathAttemptUsedByController.set(controller, false);
+        lastPathResult = {
+          status: "start_recovery",
+          accepted: true,
+        };
+        lastWorldPath = [
+          {
+            x: selectedResolvedStartWorld.x,
+            y: selectedResolvedStartWorld.y,
+          },
+        ];
+        if (!suppressMarker) {
+          showMarker(selectedResolvedStartWorld, true);
+        }
+        return {
+          accepted: true,
+          goalWorld: { ...selectedResolvedStartWorld },
+          pathLength: 1,
+          status: "start_recovery",
+          wasGoalClamped: clampedTarget.wasClamped,
+          expansionAttemptCount: expansionAttempts.length,
+          expansionFactorUsed: selectedExpansionFactor,
+        };
+      }
+      if (!suppressMarker) {
+        showMarker(resolvedGoal.world, false);
+      }
       lastPathResult = {
         status: selectedResult?.status || "no_path",
         accepted: false,
@@ -664,21 +952,23 @@ export function createHumanCommandController({
       };
     }
 
-    const worldPath = dedupeWorldPath(pathWithoutStart(selectedResult.path, startWorld));
+    const worldPath = dedupeWorldPath(pathWithoutStart(selectedResult.path, currentWorld));
     if (worldPath.length === 0) {
-      humanController.clearPath();
+      controller.clearPath();
     } else {
-      humanController.setWorldPath(worldPath);
+      controller.setWorldPath(worldPath);
     }
 
-    lastGoalWorld = { ...resolvedGoal.world };
-    repathAttemptUsed = false;
+    lastGoalWorldByController.set(controller, { ...resolvedGoal.world });
+    repathAttemptUsedByController.set(controller, false);
     lastPathResult = {
       status: selectedResult.status,
       accepted: true,
     };
     lastWorldPath = worldPath.map((point) => ({ ...point }));
-    showMarker(resolvedGoal.world, true);
+    if (!suppressMarker) {
+      showMarker(resolvedGoal.world, true);
+    }
     return {
       accepted: true,
       goalWorld: { ...resolvedGoal.world },
@@ -690,37 +980,180 @@ export function createHumanCommandController({
     };
   }
 
-  function processMoveCommand(pointerWorldX, pointerWorldY) {
-    if (!canAcceptCommands()) {
-      return {
-        accepted: false,
-        reason: "human_dead",
-      };
+  function collectClaimableTiles(targetWorld, countNeeded) {
+    const cellSize = Math.max(
+      0.05,
+      Number(subTileCellSizeTiles) || DEFAULT_SUB_TILE_CELL_SIZE_TILES
+    );
+    const anchorCell = worldToSubTileCell(targetWorld, cellSize);
+    const candidates = [];
+    const seen = new Set();
+    const maxRadiusTiles = Math.max(0, Number(groupTileClaimMaxRadius) || 0);
+    const maxRadiusCells = Math.max(0, Math.ceil(maxRadiusTiles / cellSize));
+
+    for (let radius = 0; radius <= maxRadiusCells; radius += 1) {
+      const minX = anchorCell.x - radius;
+      const maxX = anchorCell.x + radius;
+      const minY = anchorCell.y - radius;
+      const maxY = anchorCell.y + radius;
+      for (let y = minY; y <= maxY; y += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          if (
+            radius !== 0 &&
+            Math.max(Math.abs(x - anchorCell.x), Math.abs(y - anchorCell.y)) !== radius
+          ) {
+            continue;
+          }
+          const key = `${x},${y}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          seen.add(key);
+          const world = subTileCellToWorldCenter(x, y, cellSize);
+          if (
+            typeof runtime.isWalkableWorldPoint === "function" &&
+            !runtime.isWalkableWorldPoint(world.x, world.y, agentRadiusTiles)
+          ) {
+            continue;
+          }
+          if (typeof runtime.isWalkableWorldPoint !== "function") {
+            const tile = runtime.worldToTile(world.x, world.y);
+            if (!runtime.isWalkableTile(tile.x, tile.y)) {
+              continue;
+            }
+          }
+          const distanceToCommand = Math.hypot(
+            world.x - targetWorld.x,
+            world.y - targetWorld.y
+          );
+          candidates.push({
+            subTileCell: { x, y },
+            world,
+            distanceToCommand,
+          });
+        }
+      }
+      if (candidates.length >= countNeeded) {
+        break;
+      }
     }
-    if (!humanController.isSelected()) {
+
+    candidates.sort((a, b) => a.distanceToCommand - b.distanceToCommand);
+    return candidates.slice(0, Math.max(0, countNeeded));
+  }
+
+  function buildGroupAssignments(selectedControllers, targetWorld) {
+    const sortedControllers = [...selectedControllers].sort((a, b) => {
+      const aWorld = a.getCurrentWorldPosition();
+      const bWorld = b.getCurrentWorldPosition();
+      const aDist = Math.hypot(aWorld.x - targetWorld.x, aWorld.y - targetWorld.y);
+      const bDist = Math.hypot(bWorld.x - targetWorld.x, bWorld.y - targetWorld.y);
+      return aDist - bDist;
+    });
+
+    const claimableTiles = collectClaimableTiles(targetWorld, sortedControllers.length);
+    const assignments = [];
+    const count = Math.min(sortedControllers.length, claimableTiles.length);
+    for (let i = 0; i < count; i += 1) {
+      const claimedTile = {
+        x: runtime.worldToTile(claimableTiles[i].world.x, claimableTiles[i].world.y).x,
+        y: runtime.worldToTile(claimableTiles[i].world.x, claimableTiles[i].world.y).y,
+      };
+      const claimedSubTile = {
+        x: claimableTiles[i].subTileCell.x,
+        y: claimableTiles[i].subTileCell.y,
+      };
+      assignments.push({
+        controller: sortedControllers[i],
+        goalWorld: {
+          x: claimableTiles[i].world.x,
+          y: claimableTiles[i].world.y,
+        },
+        claimedTile,
+        claimedSubTile,
+      });
+    }
+    return assignments;
+  }
+
+  function processMoveCommand(pointerWorldX, pointerWorldY) {
+    const selectedControllers = getSelectedControllers();
+    if (selectedControllers.length === 0) {
+      lastCommandSummary = {
+        selectedCount: 0,
+        assignedCount: 0,
+        acceptedCount: 0,
+        failedCount: 0,
+      };
       return {
         accepted: false,
         reason: "not_selected",
       };
     }
 
-    return computeAndAssignPath(
-      {
-        x: Number(pointerWorldX) || 0,
-        y: Number(pointerWorldY) || 0,
-      },
-      true
-    );
+    const targetWorld = {
+      x: Number(pointerWorldX) || 0,
+      y: Number(pointerWorldY) || 0,
+    };
+    const assignments = buildGroupAssignments(selectedControllers, targetWorld);
+    if (assignments.length === 0) {
+      showMarker(targetWorld, false);
+      lastCommandSummary = {
+        selectedCount: selectedControllers.length,
+        assignedCount: 0,
+        acceptedCount: 0,
+        failedCount: selectedControllers.length,
+      };
+      return {
+        accepted: false,
+        reason: "no_claimable_tiles",
+        selectedCount: selectedControllers.length,
+        assignedCount: 0,
+      };
+    }
+
+    let acceptedCount = 0;
+    let failedCount = 0;
+    for (const assignment of assignments) {
+      const result = computeAndAssignPath(
+        assignment.controller,
+        assignment.goalWorld,
+        true,
+        { suppressMarker: true }
+      );
+      if (result.accepted) {
+        acceptedCount += 1;
+      } else {
+        failedCount += 1;
+      }
+    }
+    failedCount += Math.max(0, selectedControllers.length - assignments.length);
+    const anyAccepted = acceptedCount > 0;
+    showMarker(targetWorld, anyAccepted);
+    lastCommandSummary = {
+      selectedCount: selectedControllers.length,
+      assignedCount: assignments.length,
+      acceptedCount,
+      failedCount,
+    };
+
+    return {
+      accepted: anyAccepted,
+      reason: anyAccepted ? "ok" : "no_path",
+      selectedCount: selectedControllers.length,
+      assignedCount: assignments.length,
+      acceptedCount,
+      failedCount,
+      claimedTiles: assignments.map((assignment) => ({ ...assignment.claimedTile })),
+      claimedSubTiles: assignments.map((assignment) => ({
+        ...assignment.claimedSubTile,
+      })),
+    };
   }
 
   function issueMoveCommand(pointerWorldX, pointerWorldY) {
-    if (!canAcceptCommands()) {
-      return {
-        accepted: false,
-        reason: "human_dead",
-      };
-    }
-    if (!humanController.isSelected()) {
+    const selectedControllers = getSelectedControllers();
+    if (selectedControllers.length === 0) {
       return {
         accepted: false,
         reason: "not_selected",
@@ -763,11 +1196,31 @@ export function createHumanCommandController({
       changed = true;
     }
 
-    const blockedEvent = humanController.consumePathBlockedEvent();
-    if (blockedEvent && lastGoalWorld && !repathAttemptUsed) {
-      repathAttemptUsed = true;
-      const repathResult = computeAndAssignPath(lastGoalWorld, true);
-      repathAttemptUsed = true;
+    for (const [controller, lastGoalWorld] of lastGoalWorldByController.entries()) {
+      if (!canAcceptCommands(controller)) {
+        lastGoalWorldByController.delete(controller);
+        repathAttemptUsedByController.delete(controller);
+        continue;
+      }
+      if (typeof controller.consumePathBlockedEvent !== "function") {
+        continue;
+      }
+      const blockedEvent = controller.consumePathBlockedEvent();
+      if (!blockedEvent) {
+        continue;
+      }
+      const alreadyRetried = repathAttemptUsedByController.get(controller) === true;
+      if (alreadyRetried) {
+        continue;
+      }
+      repathAttemptUsedByController.set(controller, true);
+      const repathResult = computeAndAssignPath(
+        controller,
+        lastGoalWorld,
+        true,
+        { suppressMarker: true }
+      );
+      repathAttemptUsedByController.set(controller, true);
       changed = changed || repathResult.accepted;
     }
 
@@ -793,7 +1246,12 @@ export function createHumanCommandController({
       lastPathRequest: lastPathRequest
         ? {
             startWorld: { ...lastPathRequest.startWorld },
-            targetWorld: { ...lastPathRequest.targetWorld },
+            resolvedStartWorld: lastPathRequest.resolvedStartWorld
+              ? { ...lastPathRequest.resolvedStartWorld }
+              : null,
+            targetWorld: lastPathRequest.targetWorld
+              ? { ...lastPathRequest.targetWorld }
+              : null,
             effectiveTargetWorld: lastPathRequest.effectiveTargetWorld
               ? { ...lastPathRequest.effectiveTargetWorld }
               : null,
@@ -801,10 +1259,14 @@ export function createHumanCommandController({
               ? { ...lastPathRequest.resolvedGoalWorld }
               : null,
             wasGoalClamped: lastPathRequest.wasGoalClamped === true,
+            wasStartAdjusted: lastPathRequest.wasStartAdjusted === true,
           }
         : null,
       lastPathResult: lastPathResult ? { ...lastPathResult } : null,
-      lastGoalWorld: lastGoalWorld ? { ...lastGoalWorld } : null,
+      trackedGoals: Array.from(lastGoalWorldByController.values()).map((world) => ({
+        x: world.x,
+        y: world.y,
+      })),
       lastWorldPath: lastWorldPath.map((point) => ({ ...point })),
       lastPathDebug: lastPathDebug
         ? {
@@ -832,6 +1294,8 @@ export function createHumanCommandController({
         : null,
       commandCooldownRemaining,
       hasQueuedCommand: queuedGoalWorld !== null,
+      selectedCount: getSelectedControllers().length,
+      lastCommandSummary: lastCommandSummary ? { ...lastCommandSummary } : null,
     };
   }
 

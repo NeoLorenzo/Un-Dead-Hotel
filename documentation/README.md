@@ -23,6 +23,8 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
 
 - `archive/FIRST_CONTACT_IMPLEMENTATION_PLAN.md`
   - Completed phase-by-phase implementation/spec tracker for the first-contact slice.
+- `archive/GANGING_UP_IMPLEMENTATION_PLAN.md`
+  - Completed phase-by-phase implementation/spec tracker for the ganging-up multi-survivor slice.
 - `archive/FIRST_HUMAN_IMPLEMENTATION_PLAN.md`
   - Completed phase-by-phase implementation/spec tracker for the first controllable human slice.
 - `archive/FIRST_ZOMBIE_IMPLEMENTATION_PLAN.md`

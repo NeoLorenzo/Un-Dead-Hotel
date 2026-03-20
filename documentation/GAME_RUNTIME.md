@@ -16,10 +16,11 @@ Debug runtime remains available:
 2. Create runtime adapter (`createPhaserRuntimeAdapter`).
 3. Create runtime debug controller (`createRuntimeDebugController`).
 4. Create gameplay controllers for active runtime mode.
-   - Current mode (`first_contact`) composes:
-   - `humanController`
-   - `humanSelectionController`
-   - `humanCommandController`
+   - Current mode (`first_contact`, running the ganging-up slice) composes:
+   - `humanManager` (primary survivor + natural guests)
+   - `humanController` (primary survivor convenience handle)
+   - `humanSelectionController` (roster-based survivor selection set)
+   - `humanCommandController` (selected-survivor group path commands)
    - `zombieManager`
    - `agentHpBarOverlay`
    - `gameOverOverlay`
@@ -57,8 +58,9 @@ Movement updates camera tile position through `cameraController`.
 
 Current runtime mode input policy (`first_contact`):
 
-- Left click: human selection (single-click and drag-box).
-- `Ctrl + Left Click`: issue human move command.
+- Left click: survivor selection (single-click and drag-box).
+- `Shift + Left Click`: survivor additive/toggle selection.
+- `Ctrl + Left Click`: issue group move command for selected survivors.
 - Zombie manual click-to-spawn is disabled in this mode (population comes from first-contact spawn policy).
 
 ## Render Model
@@ -100,6 +102,10 @@ When debug mode is enabled in game runtime:
 - draws active recovery indicator rings,
 - draws zombie collider boundaries,
 - shows first-contact text diagnostics:
+  - survivor/guest counts and guest spawn-cycle counters,
+  - guest perception and flee/wander cycle counters,
+  - guest conversion totals/last-cycle events,
+  - survivor command/path budget counters (assignment success, expansion attempts, path search stats),
   - human HP/death state,
   - zombie HP summary,
   - pursuit mode distribution and lock counts,
@@ -133,8 +139,23 @@ When debug mode is enabled in game runtime:
   - `1.0s` cooldown per zombie,
   - cooldown progress exposed for UI/debug.
 
+## Human Roster/Role Model (Phaser)
+
+- `humanManager` owns all humans and their runtime role state.
+- First spawned human is `survivor` (player-controllable).
+- Natural spawns are `guest` (AI-controlled).
+- Guest population target is static and derived from zombie target count (`1:10` ratio).
+- Guest spawn/recycle rings anchor to all living survivors.
+- Guests use zombie-style cone/LOS perception and wander/flee behavior.
+- Survivor touching a guest converts that guest into a survivor.
+- Survivors are player-controlled only (no autonomous flee).
+- Nearby survivors apply soft separation nudges to avoid persistent overlap.
+
 ## Human Path Command Model (Phaser)
 
+- Command controller reads selected survivors from selection controller state.
+- Group commands claim unique quarter-tile destination cells around the click target.
+- Each selected survivor receives an individual path assignment toward its claimed destination.
 - Command controller resolves nearest navigable world goal from pointer target.
 - Runtime adapter builds an obstacle-inflated sub-tile navigation grid around command bounds.
 - Pathfinding uses engine `subTilePathfinder` bidirectional A* with heap-based frontiers.

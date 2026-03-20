@@ -76,13 +76,17 @@ The current architecture is organized around strict separation of concerns:
 - `engine/world/subTilePathfinder.js`
   - framework-agnostic sub-tile bidirectional A* pathfinding utility (heap-based frontier) with 8-direction expansion and corner-safe diagonal rules.
 - `apps/phaser/human/humanController.js`
-  - human state, movement, collider integration, selection state, and HP/death state.
+  - per-human state, movement/collider integration, role metadata (`survivor`/`guest`), selection hooks, and HP/death state.
+- `apps/phaser/human/humanManager.js`
+  - human roster orchestration, natural guest spawn/recycle, guest perception/behavior loops, survivor-touch conversion, and survivor soft separation.
+- `apps/phaser/human/humanPerception.js`
+  - reusable human cone + line-of-sight perception evaluation used by guest behavior.
 - `apps/phaser/human/humanSelectionController.js`
-  - click and drag-box selection input handling.
+  - roster-based survivor selection handling (`Shift + Left Click` toggle and drag-box multi-select).
 - `apps/phaser/human/humanCommandController.js`
-  - `Ctrl + Left Click` world-space move command orchestration with 8-direction sub-tile pathing and boundary-aware directional nav-window expansion retries.
+  - selected-survivor group move orchestration (`Ctrl + Left Click`) with unique destination claims, 8-direction sub-tile pathing, and boundary-aware directional nav-window expansion retries.
 - `apps/phaser/debug/humanDebugOverlay.js`
-  - human debug renderer.
+  - human/guest debug renderer (path, colliders, guest vision cone/rays, detection lock, and guest wander recovery diagnostics).
 - `apps/phaser/combat/healthModel.js`
   - framework-agnostic HP model and death/revive hooks shared by humans and zombies.
 - `apps/phaser/combat/zombieAttackResolver.js`
@@ -96,7 +100,7 @@ The current architecture is organized around strict separation of concerns:
 - `apps/phaser/debug/zombieDebugOverlay.js`
   - zombie debug renderer for cones, clipped rays, path segments, waypoint candidate diagnostics, failed-sector arcs, recovery indicator, and colliders.
 - `apps/phaser/debug/firstContactDiagnosticsPanel.js`
-  - text diagnostics panel for first-contact HP/pursuit/attack/population state.
+  - text diagnostics panel for first-contact survivor/guest/zombie state, guest behavior/conversion cycles, and path budget telemetry.
 - `apps/phaser/ui/agentHpBarOverlay.js`
   - world-space HP bars for humans and zombies plus zombie cooldown bar.
 - `apps/phaser/ui/gameOverOverlay.js`
@@ -118,8 +122,10 @@ Dependency direction for this slice:
 3. Camera chunk coordinate is computed from camera tile position.
 4. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
 5. Renderer requests visible chunks via `ensureChunk(...)` callback.
-6. Current runtime mode (`first_contact`) composes humans + zombies together:
-   - human selection and command loop,
+6. Current runtime mode (`first_contact`, ganging-up slice) composes humans + zombies together:
+   - human roster manager (survivor + guests),
+   - survivor multi-select and group command loop,
+   - guest spawn/perception/wander/flee/conversion behavior loops,
    - startup zombie ring spawn and perimeter recycle policy,
    - pursuit and touch-attack loop with cooldown,
    - always-visible HP bars and extinction-based game-over overlay.
