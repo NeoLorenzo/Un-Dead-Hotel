@@ -72,7 +72,10 @@ Returned API:
     - `touchedBoundary`, `domainClipped`
   - implementation details:
     - bidirectional A* (forward/backward search fronts),
-    - heap-based open frontier selection.
+    - heap-based open frontier selection,
+    - 8-direction neighbor expansion (cardinal + diagonal),
+    - octile-distance heuristic,
+    - diagonal corner-cut prevention (adjacent cardinal cells must be walkable).
 - `createSubTilePathfinder()`
   - returns `{ findPath }`
 
@@ -105,7 +108,7 @@ Returned API includes:
 
 ### `apps/phaser/human/humanController.js`
 
-- `createHumanController({ scene, runtime, moveSpeedTilesPerSecond?, spawnSearchRadiusTiles?, spawnTile? })`
+- `createHumanController({ scene, runtime, moveSpeedTilesPerSecond?, spawnSearchRadiusTiles?, spawnTile?, maxHp?, currentHp? })`
   - selection:
     - `select()`
     - `deselect()`
@@ -128,6 +131,15 @@ Returned API includes:
     - `hasActivePath()`
     - `consumePathBlockedEvent()`
     - `getSpawnTile()`
+    - `getMoveSpeedTilesPerSecond()`
+    - `getHealthState()`
+    - `getCurrentHp()`
+    - `getMaxHp()`
+    - `isDead()`
+    - `applyDamage(amount)`
+    - `heal(amount)`
+    - `setCurrentHp(nextCurrentHp)`
+    - `setMaxHp(nextMaxHp, options?)`
   - lifecycle:
     - `destroy()`
 
@@ -172,7 +184,7 @@ Returned API includes:
 
 ### `apps/phaser/zombie/zombieController.js`
 
-- `createZombieController({ id, scene, runtime, initialWorld, moveSpeedTilesPerSecond?, arrivalRadiusTiles? })`
+- `createZombieController({ id, scene, runtime, initialWorld, moveSpeedTilesPerSecond?, arrivalRadiusTiles?, maxHp?, currentHp? })`
   - waypoint/motion:
     - `setWaypointWorld(waypointWorld)`
     - `clearWaypoint()`
@@ -189,6 +201,15 @@ Returned API includes:
     - `rotateHeading(deltaRadians)`
     - `getVisionCone()` -> `{ angleDegrees, rangeTiles }`
     - `getColliderWorld()`
+    - `getMoveSpeedTilesPerSecond()`
+    - `getHealthState()`
+    - `getCurrentHp()`
+    - `getMaxHp()`
+    - `isDead()`
+    - `applyDamage(amount)`
+    - `heal(amount)`
+    - `setCurrentHp(nextCurrentHp)`
+    - `setMaxHp(nextMaxHp, options?)`
     - `getDebugState()`
   - lifecycle:
     - `destroy()`
@@ -207,14 +228,16 @@ Returned API includes:
 
 ### `apps/phaser/zombie/zombieManager.js`
 
-- `createZombieManager({ scene, runtime, spawnSearchRadiusTiles?, waypointCandidateAttempts?, waypointContinuationAttempts?, waypointConeClipRayCount?, noCandidateStreakThreshold?, recoveryDurationSeconds?, recoveryRotateRadiansPerSecond?, failedSectorMemoryTtlSeconds?, failedSectorHalfAngleDegrees? })`
-  - `spawnAtWorld(worldX, worldY)` -> `{ accepted, reason? , zombieId?, usedFallback?, spawnWorld? }`
+- `createZombieManager({ scene, runtime, spawnSearchRadiusTiles?, moveSpeedTilesPerSecond?, firstContactPolicy?, pursuitPolicy?, attackPolicy?, waypointCandidateAttempts?, waypointContinuationAttempts?, waypointConeClipRayCount?, noCandidateStreakThreshold?, recoveryDurationSeconds?, recoveryRotateRadiansPerSecond?, failedSectorMemoryTtlSeconds?, failedSectorHalfAngleDegrees?, noCandidateRepickCooldownSeconds? })`
+  - `spawnAtWorld(worldX, worldY, options?)` -> `{ accepted, reason?, zombieId?, usedFallback?, spawnWorld? }`
+    - `options.allowFallback?: boolean`
+    - `options.source?: string`
   - `update(dtSeconds)`
   - `syncToView({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
   - `getZombieCount()`
   - `setZombieWaypoint(zombieId, waypointWorld)`
   - `clearZombieWaypoint(zombieId)`
-  - `getDebugState()` (includes per-zombie waypoint selection diagnostics, per-zombie `wanderRecovery` state, and `lastSpawnAttempt` result)
+  - `getDebugState()` (includes first-contact population diagnostics, pursuit/attack diagnostics, zombie health summary, per-zombie waypoint selection diagnostics, per-zombie `wanderRecovery` state, and `lastSpawnAttempt` result)
   - `destroy()`
 
 ### `apps/phaser/debug/zombieDebugOverlay.js`
@@ -224,6 +247,48 @@ Returned API includes:
   - `isEnabled()`
   - `renderFrame({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
   - `clear()`
+  - `destroy()`
+
+### `apps/phaser/debug/firstContactDiagnosticsPanel.js`
+
+- `createFirstContactDiagnosticsPanel({ parentElement, humanController?, zombieManager?, getGameOverActive? })`
+  - `setEnabled(enabled)`
+  - `isEnabled()`
+  - `renderFrame(frameState?)`
+  - `clear()`
+  - `destroy()`
+
+### `apps/phaser/combat/healthModel.js`
+
+- `createHealthModel({ maxHp?, currentHp?, onDeath?, onRevive? })`
+  - `getState()` -> `{ currentHp, maxHp, isDead }`
+  - `getCurrentHp()`
+  - `getMaxHp()`
+  - `isDead()`
+  - `setCurrentHp(nextCurrentHp)`
+  - `setMaxHp(nextMaxHp, options?)`
+  - `applyDamage(amount)`
+  - `heal(amount)`
+
+### `apps/phaser/combat/zombieAttackResolver.js`
+
+- `createZombieAttackResolver({ damagePerHit?, cooldownSeconds?, zombieTouchRadiusTiles? })`
+  - `tickCooldown(attackState, dtSeconds)`
+  - `isOnCooldown(attackState)`
+  - `attemptAttack({ zombieWorld, targetWorld, targetTouchRadiusTiles, attackState, applyTargetDamage, targetId? })`
+
+### `apps/phaser/ui/agentHpBarOverlay.js`
+
+- `createAgentHpBarOverlay({ scene, humanController?, zombieManager? })`
+  - `renderFrame({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
+  - `clear()`
+  - `destroy()`
+
+### `apps/phaser/ui/gameOverOverlay.js`
+
+- `createGameOverOverlay({ parentElement, titleText?, subtitleText?, hintText? })`
+  - `setVisible(visible)`
+  - `isVisible()`
   - `destroy()`
 
 ### `apps/debug/debugApp.js`

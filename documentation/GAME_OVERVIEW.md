@@ -40,8 +40,22 @@ Current game runtime gameplay slice includes:
 
 - one controllable human agent with geometry-based world-space movement/collision,
 - left-click and drag-box human selection,
-- `Ctrl + Left Click` world-space move command using sub-tile bidirectional A* with boundary-aware directional retry expansion,
-- backquote-toggle debug mode for path/collider/blocked-obstacle visualization,
+- `Ctrl + Left Click` world-space move command using sub-tile bidirectional A* with:
+  - 8-direction pathing (cardinal + diagonal),
+  - corner-cut prevention for diagonal movement,
+  - boundary-aware directional retry expansion,
+- first-contact zombie population policy:
+  - startup target of `100` zombies,
+  - spawn band constrained to `10-100` tiles from the first human,
+  - perimeter recycle (out-of-range zombies are despawned and replaced),
+- zombie perception/combat loop:
+  - cone + line-of-sight target acquisition,
+  - nearest-target pursuit with last-known investigate fallback,
+  - touch attacks for `20` HP per hit on `1.0s` cooldown,
+  - zombie speed fixed at `50%` of human speed,
+- always-visible HP bars for human and zombies with zombie cooldown bars,
+- game-over overlay when no humans remain (simulation continues),
+- backquote-toggle debug mode for path/collider/AI diagnostics,
 - zoom pipeline guardrails that keep zoom feel intact while reducing high-zoom render lag (documented in `GAME_RUNTIME.md`).
 
 ## Core Setting
@@ -84,7 +98,8 @@ Current game runtime gameplay slice includes:
 - MVP zombie behavior is intentionally simple:
   - wander aimlessly,
   - detect survivors by sight,
-  - path toward and attack on contact.
+  - pursue nearest visible survivor,
+  - attack on touch cooldown.
 - Zombie style target: slow, dumb, "Walking Dead"-like shamblers.
 
 ### Vision, Territory, and Control

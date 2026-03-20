@@ -290,3 +290,58 @@ h1 {
   background: rgba(245, 245, 245, 0.95);
   color: #111111;
 }
+
+#first-contact-diagnostics {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre;
+  padding: 8px 10px;
+  border: 1px solid #777777;
+  background: rgba(245, 245, 245, 0.95);
+  color: #111111;
+}
+
+#game-over-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 8, 12, 0.66);
+  pointer-events: none;
+}
+
+#game-over-overlay[hidden] {
+  display: none !important;
+}
+
+.game-over-card {
+  width: min(520px, 90vw);
+  padding: 20px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(10, 10, 15, 0.92);
+  color: #f4f4f4;
+  text-align: center;
+}
+
+.game-over-title {
+  margin: 0 0 8px;
+  font-size: clamp(28px, 5vw, 44px);
+  line-height: 1;
+  letter-spacing: 0.08em;
+}
+
+.game-over-subtitle {
+  margin: 0;
+  font-size: 14px;
+  opacity: 0.95;
+}
+
+.game-over-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  opacity: 0.78;
+}

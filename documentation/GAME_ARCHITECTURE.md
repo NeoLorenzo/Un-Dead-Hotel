@@ -74,23 +74,33 @@ The current architecture is organized around strict separation of concerns:
 - `engine/world/aStarPathfinder.js`
   - framework-agnostic tile-grid A* utility retained for legacy/debug usage.
 - `engine/world/subTilePathfinder.js`
-  - framework-agnostic sub-tile bidirectional A* pathfinding utility (heap-based frontier).
+  - framework-agnostic sub-tile bidirectional A* pathfinding utility (heap-based frontier) with 8-direction expansion and corner-safe diagonal rules.
 - `apps/phaser/human/humanController.js`
-  - human state, movement, collider integration, and selection state (inactive in current runtime mode).
+  - human state, movement, collider integration, selection state, and HP/death state.
 - `apps/phaser/human/humanSelectionController.js`
-  - click and drag-box selection input handling (inactive in current runtime mode).
+  - click and drag-box selection input handling.
 - `apps/phaser/human/humanCommandController.js`
-  - `Ctrl + Left Click` world-space move command orchestration with boundary-aware directional nav-window expansion retries (inactive in current runtime mode).
+  - `Ctrl + Left Click` world-space move command orchestration with 8-direction sub-tile pathing and boundary-aware directional nav-window expansion retries.
 - `apps/phaser/debug/humanDebugOverlay.js`
-  - human debug renderer (inactive in current runtime mode).
+  - human debug renderer.
+- `apps/phaser/combat/healthModel.js`
+  - framework-agnostic HP model and death/revive hooks shared by humans and zombies.
+- `apps/phaser/combat/zombieAttackResolver.js`
+  - framework-agnostic zombie touch-attack resolver and cooldown timing.
 - `apps/phaser/zombie/zombieManager.js`
-  - zombie spawn, update orchestration, separation pass, failed-sector memory/recovery steering, and debug-state aggregation.
+  - zombie spawn/update orchestration, first-contact ring population maintenance, pursuit/attack state orchestration, separation pass, failed-sector memory/recovery steering, and debug-state aggregation.
 - `apps/phaser/zombie/zombieController.js`
-  - per-zombie motion state and collision-aware direct steering to waypoint.
+  - per-zombie motion, HP state, and collision-aware direct steering to waypoint.
 - `apps/phaser/zombie/zombieWanderPlanner.js`
   - wall-clipped in-cone waypoint sampling with blocked-sector filtering and short-horizon continuation expansion (`A -> B`) fallback policy.
 - `apps/phaser/debug/zombieDebugOverlay.js`
   - zombie debug renderer for cones, clipped rays, path segments, waypoint candidate diagnostics, failed-sector arcs, recovery indicator, and colliders.
+- `apps/phaser/debug/firstContactDiagnosticsPanel.js`
+  - text diagnostics panel for first-contact HP/pursuit/attack/population state.
+- `apps/phaser/ui/agentHpBarOverlay.js`
+  - world-space HP bars for humans and zombies plus zombie cooldown bar.
+- `apps/phaser/ui/gameOverOverlay.js`
+  - game-over overlay UI for all-human extinction.
 
 Dependency direction for this slice:
 
@@ -108,7 +118,11 @@ Dependency direction for this slice:
 3. Camera chunk coordinate is computed from camera tile position.
 4. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
 5. Renderer requests visible chunks via `ensureChunk(...)` callback.
-6. Current runtime mode (`zombie_wander`) routes left-click spawn to zombie manager and runs in-cone waypoint wandering.
+6. Current runtime mode (`first_contact`) composes humans + zombies together:
+   - human selection and command loop,
+   - startup zombie ring spawn and perimeter recycle policy,
+   - pursuit and touch-attack loop with cooldown,
+   - always-visible HP bars and extinction-based game-over overlay.
 7. `runtimeHud.render(...)` presents runtime state metrics.
 
 ## Why This Is "Proper" Relative To Previous State

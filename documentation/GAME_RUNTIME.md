@@ -16,9 +16,16 @@ Debug runtime remains available:
 2. Create runtime adapter (`createPhaserRuntimeAdapter`).
 3. Create runtime debug controller (`createRuntimeDebugController`).
 4. Create gameplay controllers for active runtime mode.
-   - Current mode (`zombie_wander`) composes:
+   - Current mode (`first_contact`) composes:
+   - `humanController`
+   - `humanSelectionController`
+   - `humanCommandController`
    - `zombieManager`
+   - `agentHpBarOverlay`
+   - `gameOverOverlay`
+   - `humanDebugOverlay`
    - `zombieDebugOverlay`
+   - `firstContactDiagnosticsPanel`
 5. Register pointer and keyboard handlers.
 6. Create chunk renderer resources and `runtimeHud`.
 7. Ensure `20x20` startup stream window.
@@ -48,12 +55,11 @@ Zoom input:
 
 Movement updates camera tile position through `cameraController`.
 
-Current runtime mode input policy (`zombie_wander`):
+Current runtime mode input policy (`first_contact`):
 
-- Left click: spawn zombie at pointer world position.
-- Blocked click target: fallback to nearest walkable tile center (`3`-tile search radius).
-- If no walkable fallback is found: spawn is rejected.
-- Human selection and human move-command handlers are disabled in this mode.
+- Left click: human selection (single-click and drag-box).
+- `Ctrl + Left Click`: issue human move command.
+- Zombie manual click-to-spawn is disabled in this mode (population comes from first-contact spawn policy).
 
 ## Render Model
 
@@ -92,12 +98,20 @@ When debug mode is enabled in game runtime:
 - draws wall-clipped cone ray samples,
 - draws failed-sector memory arcs,
 - draws active recovery indicator rings,
-- draws zombie collider boundaries.
+- draws zombie collider boundaries,
+- shows first-contact text diagnostics:
+  - human HP/death state,
+  - zombie HP summary,
+  - pursuit mode distribution and lock counts,
+  - attack readiness and per-tick attack outcomes,
+  - first-contact population recycle/spawn counters.
 
-## Zombie Wander Model (Phaser)
+## Zombie AI Model (Phaser)
 
 - `zombieManager` owns spawned zombie set and update/sync orchestration.
 - `zombieController` owns per-zombie world movement state.
+- In `first_contact`, startup population policy attempts to fill `100` zombies in a `10-100` tile ring around the first human.
+- Zombies outside the `100`-tile perimeter from the nearest living human are despawned and replaced via ring spawn attempts.
 - `zombieWanderPlanner` picks random in-cone waypoints with:
   - world walkability validation,
   - line-of-sight validation through world geometry.
@@ -110,12 +124,22 @@ When debug mode is enabled in game runtime:
 - Movement is direct world-space steering to waypoint (no A* for this slice).
 - When waypoint is reached/cleared or blocked, manager triggers immediate repick.
 - Nearby zombies apply soft separation nudges to avoid persistent overlap.
+- Pursuit state machine:
+  - acquire nearest human when inside cone + line-of-sight,
+  - lock on and chase human-anchored waypoint,
+  - on LOS loss move to last-known waypoint then resume wander.
+- Attack state:
+  - touch-range attack for `20` damage per hit,
+  - `1.0s` cooldown per zombie,
+  - cooldown progress exposed for UI/debug.
 
-## Human Path Command Model (Phaser, Inactive In Current Mode)
+## Human Path Command Model (Phaser)
 
 - Command controller resolves nearest navigable world goal from pointer target.
 - Runtime adapter builds an obstacle-inflated sub-tile navigation grid around command bounds.
 - Pathfinding uses engine `subTilePathfinder` bidirectional A* with heap-based frontiers.
+- Sub-tile pathfinding supports 8-direction expansion (cardinal + diagonal).
+- Diagonal expansion enforces corner-safety (no corner cutting through blocked geometry).
 - Pathfinder search stats expose boundary-touch and likely-clipped-domain signals for command retries.
 - Command controller retries with configured expansion factors, then boundary-aware directional nav-window growth when clipped.
 - Current scene tuning uses bounded caps for performance (`maxPathNodes=32000`, `maxDynamicExpansionAttempts=7`, `maxAutoPaddingTiles=1536`).
@@ -124,7 +148,7 @@ When debug mode is enabled in game runtime:
 ## Debug Controller Model
 
 - Runtime debug ownership is centralized in `runtimeDebugController`.
-- Debug renderers register with runtime controller (human/zombie overlays).
+- Debug renderers register with runtime controller (human/zombie overlays and first-contact diagnostics panel).
 - Toggle state is no longer owned by any individual gameplay controller.
 
 ## HUD Model
@@ -140,7 +164,7 @@ When debug mode is enabled in game runtime:
 
 Game runtime appends extra renderer diagnostics (pending chunk textures and Phaser version) after the shared HUD content.
 
-Runtime debug visualization is separate from HUD text and rendered in dedicated overlay layers.
+Runtime debug visualization is separate from HUD text and rendered in dedicated overlay layers. In first-contact mode, world-space HP/cooldown bars are always visible and game-over overlay appears on all-human extinction while simulation continues.
 
 ## Performance Notes
 

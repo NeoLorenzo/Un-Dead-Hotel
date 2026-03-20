@@ -1,11 +1,19 @@
+import {
+  createHealthModel,
+  DEFAULT_AGENT_MAX_HP,
+} from "../combat/healthModel.js";
+
 const HUMAN_TEXTURE_KEY = "human-placeholder-v1";
 const HUMAN_VISUAL_DIAMETER_TILES = 0.82;
 const HUMAN_COLLIDER_DIAMETER_TILES = 0.58;
 const HUMAN_COLLIDER_RADIUS_TILES = HUMAN_COLLIDER_DIAMETER_TILES * 0.5;
 const HUMAN_SELECTION_RING_SCALE = 0.78;
 const HUMAN_SELECTION_RING_COLOR = 0x6bf779;
+const HUMAN_DEAD_TINT = 0x884141;
+const HUMAN_ALIVE_TINT = 0xffffff;
 const DEFAULT_MOVE_SPEED_TILES_PER_SECOND = 2.3;
 const DEFAULT_SPAWN_SEARCH_RADIUS_TILES = 10;
+const DEFAULT_HUMAN_MAX_HP = DEFAULT_AGENT_MAX_HP;
 const ARRIVAL_RADIUS_TILES = 0.09;
 const MIN_MOVEMENT_DISTANCE_TILES = 0.001;
 const COLLISION_RESOLVE_STEP_TILES = 0.12;
@@ -106,6 +114,8 @@ export function createHumanController({
   moveSpeedTilesPerSecond = DEFAULT_MOVE_SPEED_TILES_PER_SECOND,
   spawnSearchRadiusTiles = DEFAULT_SPAWN_SEARCH_RADIUS_TILES,
   spawnTile: providedSpawnTile = null,
+  maxHp = DEFAULT_HUMAN_MAX_HP,
+  currentHp = maxHp,
 } = {}) {
   if (!scene || !runtime) {
     throw new Error("createHumanController requires scene and runtime.");
@@ -148,6 +158,28 @@ export function createHumanController({
     x: 0,
     y: 0,
   };
+  const moveSpeed = Math.max(
+    0.01,
+    Number(moveSpeedTilesPerSecond) || DEFAULT_MOVE_SPEED_TILES_PER_SECOND
+  );
+  const health = createHealthModel({
+    maxHp,
+    currentHp,
+    onDeath: () => {
+      clearPath();
+      deselect();
+      sprite.setTint(HUMAN_DEAD_TINT);
+      sprite.setAlpha(0.86);
+    },
+    onRevive: () => {
+      sprite.setTint(HUMAN_ALIVE_TINT);
+      sprite.setAlpha(1);
+    },
+  });
+  if (health.isDead()) {
+    sprite.setTint(HUMAN_DEAD_TINT);
+    sprite.setAlpha(0.86);
+  }
 
   let selected = false;
   let pathWaypointsWorld = [];
@@ -217,6 +249,10 @@ export function createHumanController({
   }
 
   function setPath(nextPathTiles, options = {}) {
+    if (health.isDead()) {
+      clearPath();
+      return;
+    }
     const tileWaypoints = Array.isArray(nextPathTiles)
       ? nextPathTiles.map((tile) => normalizeTilePoint(tile))
       : [];
@@ -235,6 +271,10 @@ export function createHumanController({
   }
 
   function setWorldPath(nextWorldPathPoints) {
+    if (health.isDead()) {
+      clearPath();
+      return;
+    }
     const sanitized = sanitizeWorldPath(nextWorldPathPoints);
     pendingPathBlockedEvent = null;
     if (sanitized.length === 0) {
@@ -305,6 +345,10 @@ export function createHumanController({
   }
 
   function update(dtSeconds) {
+    if (health.isDead()) {
+      clearVelocity();
+      return false;
+    }
     const dt = clampFinite(dtSeconds, 0);
     if (dt <= 0) {
       clearVelocity();
@@ -329,7 +373,7 @@ export function createHumanController({
       return true;
     }
 
-    const maxStep = moveSpeedTilesPerSecond * dt;
+    const maxStep = moveSpeed * dt;
     const step = Math.min(maxStep, distance);
     const stepX = (toTargetX / distance) * step;
     const stepY = (toTargetY / distance) * step;
@@ -383,6 +427,11 @@ export function createHumanController({
   }
 
   function select() {
+    if (health.isDead()) {
+      selected = false;
+      redrawSelectionRing();
+      return;
+    }
     selected = true;
     redrawSelectionRing();
   }
@@ -410,6 +459,8 @@ export function createHumanController({
       spawnTile: { ...spawnTile },
       worldPosition: { ...worldPosition },
       worldVelocity: { ...worldVelocity },
+      moveSpeedTilesPerSecond: moveSpeed,
+      health: health.getState(),
       collider: getBoundsWorld(),
       pathWorld: pathWaypointsWorld.map((point) => ({ ...point })),
       waypointIndex,
@@ -479,6 +530,22 @@ export function createHumanController({
     return event;
   }
 
+  function applyDamage(amount) {
+    return health.applyDamage(amount);
+  }
+
+  function heal(amount) {
+    return health.heal(amount);
+  }
+
+  function setCurrentHp(nextCurrentHp) {
+    return health.setCurrentHp(nextCurrentHp);
+  }
+
+  function setMaxHp(nextMaxHp, options) {
+    return health.setMaxHp(nextMaxHp, options);
+  }
+
   return {
     select,
     deselect,
@@ -495,9 +562,18 @@ export function createHumanController({
     getDebugState,
     getCurrentTile,
     getCurrentWorldPosition,
+    getMoveSpeedTilesPerSecond: () => moveSpeed,
     hasActivePath,
     consumePathBlockedEvent,
     getSpawnTile: () => ({ ...spawnTile }),
+    getHealthState: () => health.getState(),
+    getCurrentHp: () => health.getCurrentHp(),
+    getMaxHp: () => health.getMaxHp(),
+    isDead: () => health.isDead(),
+    applyDamage,
+    heal,
+    setCurrentHp,
+    setMaxHp,
     destroy,
   };
 }

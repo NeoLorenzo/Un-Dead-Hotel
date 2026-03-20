@@ -419,6 +419,13 @@ export function createHumanCommandController({
   let queuedGoalWorld = null;
   let lastGridSummary = null;
 
+  function canAcceptCommands() {
+    if (typeof humanController.isDead === "function" && humanController.isDead()) {
+      return false;
+    }
+    return true;
+  }
+
   function showMarker(goalWorld, accepted) {
     const world = normalizeWorldPoint(goalWorld);
     marker = {
@@ -684,6 +691,12 @@ export function createHumanCommandController({
   }
 
   function processMoveCommand(pointerWorldX, pointerWorldY) {
+    if (!canAcceptCommands()) {
+      return {
+        accepted: false,
+        reason: "human_dead",
+      };
+    }
     if (!humanController.isSelected()) {
       return {
         accepted: false,
@@ -701,6 +714,12 @@ export function createHumanCommandController({
   }
 
   function issueMoveCommand(pointerWorldX, pointerWorldY) {
+    if (!canAcceptCommands()) {
+      return {
+        accepted: false,
+        reason: "human_dead",
+      };
+    }
     if (!humanController.isSelected()) {
       return {
         accepted: false,

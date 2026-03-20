@@ -18,13 +18,15 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
   - Frozen runtime-facing contract boundary for Phaser-first migration Phase 1.
 - `PHASER_ADAPTER_API.md`
   - Phase 3 adapter contract between Phaser scene runtime and engine systems.
-- `FIRST_HUMAN_IMPLEMENTATION_PLAN.md`
-  - Archive pointer for the completed first-human implementation plan.
 
 ## Archived Documents
 
+- `archive/FIRST_CONTACT_IMPLEMENTATION_PLAN.md`
+  - Completed phase-by-phase implementation/spec tracker for the first-contact slice.
 - `archive/FIRST_HUMAN_IMPLEMENTATION_PLAN.md`
   - Completed phase-by-phase implementation/spec tracker for the first controllable human slice.
+- `archive/FIRST_ZOMBIE_IMPLEMENTATION_PLAN.md`
+  - Completed phase-by-phase implementation/spec tracker for the first zombie slice.
 
 ## Current Runtime Entrypoints
 

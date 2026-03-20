@@ -1,8 +1,13 @@
-const CARDINAL_DIRECTIONS = [
+const SQRT2 = Math.SQRT2;
+const SEARCH_DIRECTIONS = [
   { dx: 1, dy: 0, cost: 1 },
   { dx: -1, dy: 0, cost: 1 },
   { dx: 0, dy: 1, cost: 1 },
   { dx: 0, dy: -1, cost: 1 },
+  { dx: 1, dy: 1, cost: SQRT2 },
+  { dx: 1, dy: -1, cost: SQRT2 },
+  { dx: -1, dy: 1, cost: SQRT2 },
+  { dx: -1, dy: -1, cost: SQRT2 },
 ];
 
 const DEFAULT_MAX_NODES = 32000;
@@ -28,8 +33,31 @@ function normalizeWorldPoint(point) {
   };
 }
 
-function manhattanDistance(a, b) {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+function octileDistance(a, b) {
+  const dx = Math.abs(a.x - b.x);
+  const dy = Math.abs(a.y - b.y);
+  const minDelta = Math.min(dx, dy);
+  const maxDelta = Math.max(dx, dy);
+  return maxDelta + (SQRT2 - 1) * minDelta;
+}
+
+function canTraverseDirection(navigationGrid, fromX, fromY, direction) {
+  const nextX = fromX + direction.dx;
+  const nextY = fromY + direction.dy;
+  if (!navigationGrid.isWalkableCell(nextX, nextY)) {
+    return false;
+  }
+
+  const isDiagonal = direction.dx !== 0 && direction.dy !== 0;
+  if (!isDiagonal) {
+    return true;
+  }
+
+  // Disallow corner cutting for diagonals: both adjacent cardinal cells
+  // must be walkable to keep movement collision-safe.
+  const sideXWalkable = navigationGrid.isWalkableCell(fromX + direction.dx, fromY);
+  const sideYWalkable = navigationGrid.isWalkableCell(fromX, fromY + direction.dy);
+  return sideXWalkable && sideYWalkable;
 }
 
 function dedupeWorldPath(path) {
@@ -213,7 +241,7 @@ function createSearchState(startCell, heuristicTargetCell) {
   const records = new Map();
   const heap = createMinHeap(compareHeapEntry);
   const startKey = coordKey(startCell.x, startCell.y);
-  const h = manhattanDistance(startCell, heuristicTargetCell);
+  const h = octileDistance(startCell, heuristicTargetCell);
   const startRecord = {
     x: startCell.x,
     y: startCell.y,
@@ -350,12 +378,12 @@ function expandSearchFront({
     passiveSearch.records
   );
 
-  for (const direction of CARDINAL_DIRECTIONS) {
-    const nx = current.x + direction.dx;
-    const ny = current.y + direction.dy;
-    if (!navigationGrid.isWalkableCell(nx, ny)) {
+  for (const direction of SEARCH_DIRECTIONS) {
+    if (!canTraverseDirection(navigationGrid, current.x, current.y, direction)) {
       continue;
     }
+    const nx = current.x + direction.dx;
+    const ny = current.y + direction.dy;
 
     const neighborKey = coordKey(nx, ny);
     const tentativeG = current.g + direction.cost;
@@ -365,7 +393,7 @@ function expandSearchFront({
     }
 
     activeSearch.serial += 1;
-    const h = manhattanDistance({ x: nx, y: ny }, activeSearch.heuristicTargetCell);
+    const h = octileDistance({ x: nx, y: ny }, activeSearch.heuristicTargetCell);
     const nextRecord = {
       x: nx,
       y: ny,

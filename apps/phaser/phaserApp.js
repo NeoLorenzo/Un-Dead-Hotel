@@ -10,11 +10,14 @@ import { createSubTilePathfinder } from "../../engine/world/subTilePathfinder.js
 import { createRuntimeHud } from "../../engine/world/runtimeHud.js";
 import { createPhaserRuntimeAdapter } from "./phaserRuntimeAdapter.js";
 import { createHumanDebugOverlay } from "./debug/humanDebugOverlay.js";
+import { createFirstContactDiagnosticsPanel } from "./debug/firstContactDiagnosticsPanel.js";
 import { createRuntimeDebugController } from "./debug/runtimeDebugController.js";
 import { createZombieDebugOverlay } from "./debug/zombieDebugOverlay.js";
 import { createHumanController } from "./human/humanController.js";
 import { createHumanCommandController } from "./human/humanCommandController.js";
 import { createHumanSelectionController } from "./human/humanSelectionController.js";
+import { createAgentHpBarOverlay } from "./ui/agentHpBarOverlay.js";
+import { createGameOverOverlay } from "./ui/gameOverOverlay.js";
 import { createZombieManager } from "./zombie/zombieManager.js";
 
 const GAME_WIDTH = 1280;
@@ -57,10 +60,21 @@ const HUMAN_COMMAND_NAV_PADDING_EXPANSION_FACTORS = [1, 2, 4, 8];
 const HUMAN_COMMAND_MAX_DYNAMIC_EXPANSION_ATTEMPTS = 7;
 const HUMAN_COMMAND_MAX_AUTO_PADDING_TILES = 1536;
 const ZOMBIE_SPAWN_SEARCH_RADIUS_TILES = 3;
+const FIRST_CONTACT_ZOMBIE_SPEED_RATIO_OF_HUMAN = 0.5;
+const FIRST_CONTACT_ZOMBIE_MOVE_SPEED_TILES_PER_SECOND =
+  HUMAN_MOVE_SPEED_TILES_PER_SECOND * FIRST_CONTACT_ZOMBIE_SPEED_RATIO_OF_HUMAN;
+const FIRST_CONTACT_ZOMBIE_TARGET_COUNT = 100;
+const FIRST_CONTACT_ZOMBIE_MIN_SPAWN_RADIUS_TILES = 10;
+const FIRST_CONTACT_ZOMBIE_MAX_SPAWN_RADIUS_TILES = 100;
 const DEBUG_TOGGLE_KEYS = new Set(["`", "~"]);
 const RUNTIME_MODE_ZOMBIE_WANDER = "zombie_wander";
-const RUNTIME_MODE = RUNTIME_MODE_ZOMBIE_WANDER;
-const HUMAN_SYSTEMS_ENABLED = RUNTIME_MODE !== RUNTIME_MODE_ZOMBIE_WANDER;
+const RUNTIME_MODE_FIRST_CONTACT = "first_contact";
+const RUNTIME_MODE = RUNTIME_MODE_FIRST_CONTACT;
+const HUMAN_SYSTEMS_ENABLED = RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT;
+const ZOMBIE_SYSTEMS_ENABLED =
+  RUNTIME_MODE === RUNTIME_MODE_ZOMBIE_WANDER ||
+  RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT;
+const ZOMBIE_MANUAL_SPAWN_ENABLED = RUNTIME_MODE === RUNTIME_MODE_ZOMBIE_WANDER;
 
 const TILE_CORRIDOR = 1;
 const TILE_COLOR_CORRIDOR = "#1f1f1f";
@@ -327,7 +341,11 @@ function createRuntimeScene(Phaser) {
       this.humanDebugOverlay = null;
       this.zombieManager = null;
       this.zombieDebugOverlay = null;
+      this.firstContactDiagnosticsPanel = null;
       this.debugController = null;
+      this.agentHpBarOverlay = null;
+      this.gameOverOverlay = null;
+      this.gameOverActive = false;
       this.humanCommandDebugBridge = null;
       this.debugOverlayEnabled = false;
       this.handlePointerDown = null;
@@ -346,38 +364,6 @@ function createRuntimeScene(Phaser) {
         onVisibilityChanged: setRuntimeOverlayVisible,
         initialEnabled: this.debugOverlayEnabled,
       });
-      if (!HUMAN_SYSTEMS_ENABLED) {
-        this.zombieManager = createZombieManager({
-          scene: this,
-          runtime: this.runtime,
-          spawnSearchRadiusTiles: ZOMBIE_SPAWN_SEARCH_RADIUS_TILES,
-        });
-        this.zombieDebugOverlay = createZombieDebugOverlay({
-          scene: this,
-          runtime: this.runtime,
-          zombieManager: this.zombieManager,
-        });
-        this.debugController.addRenderer(this.zombieDebugOverlay);
-        this.handlePointerDown = (pointer) => {
-          if (pointer.button !== 0) {
-            return;
-          }
-          const cameraTile = this.runtime.getCameraTilePosition();
-          const world = screenToWorldTileSpace(
-            pointer.x,
-            pointer.y,
-            cameraTile,
-            this.tilePixels,
-            this.scale.width,
-            this.scale.height
-          );
-          const spawnResult = this.zombieManager?.spawnAtWorld(world.x, world.y);
-          if (spawnResult?.accepted) {
-            this.dirty = true;
-          }
-        };
-        this.input.on("pointerdown", this.handlePointerDown);
-      }
       if (HUMAN_SYSTEMS_ENABLED) {
         this.humanController = createHumanController({
           scene: this,
@@ -414,7 +400,131 @@ function createRuntimeScene(Phaser) {
         };
         this.debugController.addRenderer(this.humanDebugOverlay);
         this.debugController.addRenderer(this.humanCommandDebugBridge);
+      }
 
+      if (ZOMBIE_SYSTEMS_ENABLED) {
+        const getFirstContactHumanTargets = () => {
+          if (!this.humanController) {
+            return [];
+          }
+          if (
+            typeof this.humanController.isDead === "function" &&
+            this.humanController.isDead()
+          ) {
+            return [];
+          }
+          if (
+            typeof this.humanController.getCurrentWorldPosition !== "function"
+          ) {
+            return [];
+          }
+          const world = this.humanController.getCurrentWorldPosition();
+          if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
+            return [];
+          }
+          const bounds =
+            typeof this.humanController.getBoundsWorld === "function"
+              ? this.humanController.getBoundsWorld()
+              : null;
+          const touchRadiusTiles = Number.isFinite(bounds?.w) && Number.isFinite(bounds?.h)
+            ? Math.max(0.01, Math.min(bounds.w, bounds.h) * 0.5)
+            : 0.29;
+          return [
+            {
+              id: "human_primary",
+              world: {
+                x: world.x,
+                y: world.y,
+              },
+              touchRadiusTiles,
+              isDead: () =>
+                typeof this.humanController.isDead === "function"
+                  ? this.humanController.isDead()
+                  : false,
+              applyDamage: (amount) =>
+                typeof this.humanController.applyDamage === "function"
+                  ? this.humanController.applyDamage(amount)
+                  : { changed: false, becameDead: false },
+            },
+          ];
+        };
+        const firstContactPolicy =
+          RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+            ? {
+                enabled: true,
+                targetZombieCount: FIRST_CONTACT_ZOMBIE_TARGET_COUNT,
+                minSpawnRadiusTiles: FIRST_CONTACT_ZOMBIE_MIN_SPAWN_RADIUS_TILES,
+                maxSpawnRadiusTiles: FIRST_CONTACT_ZOMBIE_MAX_SPAWN_RADIUS_TILES,
+                getPerimeterAnchors: () => {
+                  const targets = getFirstContactHumanTargets();
+                  if (targets.length === 0) {
+                    return [];
+                  }
+                  return [
+                    {
+                      x: targets[0].world.x,
+                      y: targets[0].world.y,
+                    },
+                  ];
+                },
+              }
+            : null;
+        const pursuitPolicy =
+          RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+            ? {
+                enabled: true,
+                getTargets: getFirstContactHumanTargets,
+              }
+            : null;
+        const attackPolicy =
+          RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+            ? {
+                enabled: true,
+                damagePerHit: 20,
+                cooldownSeconds: 1.0,
+                getTargets: getFirstContactHumanTargets,
+              }
+            : null;
+        this.zombieManager = createZombieManager({
+          scene: this,
+          runtime: this.runtime,
+          spawnSearchRadiusTiles: ZOMBIE_SPAWN_SEARCH_RADIUS_TILES,
+          moveSpeedTilesPerSecond:
+            RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+              ? FIRST_CONTACT_ZOMBIE_MOVE_SPEED_TILES_PER_SECOND
+              : undefined,
+          firstContactPolicy,
+          pursuitPolicy,
+          attackPolicy,
+        });
+        this.zombieDebugOverlay = createZombieDebugOverlay({
+          scene: this,
+          runtime: this.runtime,
+          zombieManager: this.zombieManager,
+        });
+        this.debugController.addRenderer(this.zombieDebugOverlay);
+      }
+
+      this.agentHpBarOverlay = createAgentHpBarOverlay({
+        scene: this,
+        humanController: this.humanController,
+        zombieManager: this.zombieManager,
+      });
+      this.gameOverOverlay = createGameOverOverlay({
+        parentElement: mountElement,
+      });
+      this.gameOverOverlay.setVisible(false);
+      if (RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT && runtimeOverlayElement) {
+        this.firstContactDiagnosticsPanel = createFirstContactDiagnosticsPanel({
+          parentElement: runtimeOverlayElement,
+          humanController: this.humanController,
+          zombieManager: this.zombieManager,
+          getGameOverActive: () => this.gameOverActive,
+        });
+        this.debugController.addRenderer(this.firstContactDiagnosticsPanel);
+      }
+
+      if (HUMAN_SYSTEMS_ENABLED) {
         this.handlePointerDown = (pointer) => {
           if (pointer.button === 0 && pointer.event?.ctrlKey) {
             pointer.event.preventDefault();
@@ -456,6 +566,26 @@ function createRuntimeScene(Phaser) {
         this.input.on("pointerdown", this.handlePointerDown);
         this.input.on("pointermove", this.handlePointerMove);
         this.input.on("pointerup", this.handlePointerUp);
+      } else if (ZOMBIE_MANUAL_SPAWN_ENABLED) {
+        this.handlePointerDown = (pointer) => {
+          if (pointer.button !== 0) {
+            return;
+          }
+          const cameraTile = this.runtime.getCameraTilePosition();
+          const world = screenToWorldTileSpace(
+            pointer.x,
+            pointer.y,
+            cameraTile,
+            this.tilePixels,
+            this.scale.width,
+            this.scale.height
+          );
+          const spawnResult = this.zombieManager?.spawnAtWorld(world.x, world.y);
+          if (spawnResult?.accepted) {
+            this.dirty = true;
+          }
+        };
+        this.input.on("pointerdown", this.handlePointerDown);
       }
 
       this.cameras.main.setBackgroundColor("#101015");
@@ -548,12 +678,21 @@ function createRuntimeScene(Phaser) {
           this.zombieManager.destroy();
           this.zombieManager = null;
         }
+        if (this.agentHpBarOverlay) {
+          this.agentHpBarOverlay.destroy();
+          this.agentHpBarOverlay = null;
+        }
+        if (this.gameOverOverlay) {
+          this.gameOverOverlay.destroy();
+          this.gameOverOverlay = null;
+        }
         if (this.debugController) {
           this.debugController.destroy();
           this.debugController = null;
         }
         this.humanDebugOverlay = null;
         this.zombieDebugOverlay = null;
+        this.firstContactDiagnosticsPanel = null;
         this.humanCommandDebugBridge = null;
         this.chunkImages.clear();
         this.chunkTextures.clear();
@@ -618,6 +757,20 @@ function createRuntimeScene(Phaser) {
       }
       if (this.zombieManager && this.zombieManager.update(dt)) {
         this.dirty = true;
+      }
+
+      const livingHumanCount =
+        this.humanController &&
+        typeof this.humanController.isDead === "function" &&
+        !this.humanController.isDead()
+          ? 1
+          : 0;
+      const shouldShowGameOver = livingHumanCount <= 0;
+      if (shouldShowGameOver !== this.gameOverActive) {
+        this.gameOverActive = shouldShowGameOver;
+        if (this.gameOverOverlay) {
+          this.gameOverOverlay.setVisible(this.gameOverActive);
+        }
       }
 
       const zoomBlend = 1 - Math.exp(-ZOOM_LERP_SPEED_PER_SECOND * dt);
@@ -809,6 +962,14 @@ function createRuntimeScene(Phaser) {
       }
       if (this.zombieManager) {
         this.zombieManager.syncToView({
+          cameraTile: snapshot.cameraTile,
+          tilePixels: this.tilePixels,
+          viewWidthPx: width,
+          viewHeightPx: height,
+        });
+      }
+      if (this.agentHpBarOverlay) {
+        this.agentHpBarOverlay.renderFrame({
           cameraTile: snapshot.cameraTile,
           tilePixels: this.tilePixels,
           viewWidthPx: width,

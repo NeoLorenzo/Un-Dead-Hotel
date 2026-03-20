@@ -1,11 +1,19 @@
+import {
+  createHealthModel,
+  DEFAULT_AGENT_MAX_HP,
+} from "../combat/healthModel.js";
+
 export const ZOMBIE_TEXTURE_KEY = "zombie-placeholder-v1";
 export const ZOMBIE_VISUAL_DIAMETER_TILES = 0.82;
 export const ZOMBIE_COLLIDER_RADIUS_TILES = 0.28;
 export const ZOMBIE_VISION_CONE_ANGLE_DEGREES = 90;
 export const ZOMBIE_VISION_CONE_RANGE_TILES = 8;
+const ZOMBIE_DEAD_TINT = 0x7a3f3f;
+const ZOMBIE_ALIVE_TINT = 0xffffff;
 
 const DEFAULT_MOVE_SPEED_TILES_PER_SECOND = 1.0;
 const DEFAULT_ARRIVAL_RADIUS_TILES = 0.2;
+const DEFAULT_ZOMBIE_MAX_HP = DEFAULT_AGENT_MAX_HP;
 const MIN_MOVEMENT_DISTANCE_TILES = 0.001;
 const COLLISION_RESOLVE_STEP_TILES = 0.12;
 
@@ -57,6 +65,8 @@ export function createZombieController({
   initialWorld,
   moveSpeedTilesPerSecond = DEFAULT_MOVE_SPEED_TILES_PER_SECOND,
   arrivalRadiusTiles = DEFAULT_ARRIVAL_RADIUS_TILES,
+  maxHp = DEFAULT_ZOMBIE_MAX_HP,
+  currentHp = maxHp,
 } = {}) {
   if (!scene || !runtime) {
     throw new Error("createZombieController requires scene and runtime.");
@@ -78,6 +88,23 @@ export function createZombieController({
     x: 0,
     y: 0,
   };
+  const health = createHealthModel({
+    maxHp,
+    currentHp,
+    onDeath: () => {
+      clearWaypoint();
+      sprite.setTint(ZOMBIE_DEAD_TINT);
+      sprite.setAlpha(0.86);
+    },
+    onRevive: () => {
+      sprite.setTint(ZOMBIE_ALIVE_TINT);
+      sprite.setAlpha(1);
+    },
+  });
+  if (health.isDead()) {
+    sprite.setTint(ZOMBIE_DEAD_TINT);
+    sprite.setAlpha(0.86);
+  }
   const moveSpeed = Math.max(0.01, Number(moveSpeedTilesPerSecond) || DEFAULT_MOVE_SPEED_TILES_PER_SECOND);
   const arrivalRadius = Math.max(0.01, Number(arrivalRadiusTiles) || DEFAULT_ARRIVAL_RADIUS_TILES);
 
@@ -91,6 +118,10 @@ export function createZombieController({
   }
 
   function setWaypointWorld(nextWaypoint) {
+    if (health.isDead()) {
+      waypointWorld = null;
+      return false;
+    }
     if (!Number.isFinite(nextWaypoint?.x) || !Number.isFinite(nextWaypoint?.y)) {
       waypointWorld = null;
       return false;
@@ -151,6 +182,10 @@ export function createZombieController({
   }
 
   function update(dtSeconds) {
+    if (health.isDead()) {
+      clearVelocity();
+      return false;
+    }
     const dt = clampFinite(dtSeconds, 0);
     if (dt <= 0) {
       clearVelocity();
@@ -198,6 +233,9 @@ export function createZombieController({
   }
 
   function nudge(deltaWorldX, deltaWorldY) {
+    if (health.isDead()) {
+      return false;
+    }
     if (!Number.isFinite(deltaWorldX) || !Number.isFinite(deltaWorldY)) {
       return false;
     }
@@ -280,8 +318,10 @@ export function createZombieController({
         x: worldVelocity.x,
         y: worldVelocity.y,
       },
+      moveSpeedTilesPerSecond: moveSpeed,
       collider: getColliderWorld(),
       headingRadians,
+      health: health.getState(),
       visionConeAngleDegrees: ZOMBIE_VISION_CONE_ANGLE_DEGREES,
       visionConeRangeTiles: ZOMBIE_VISION_CONE_RANGE_TILES,
       waypointWorld: waypointWorld ? { ...waypointWorld } : null,
@@ -291,6 +331,22 @@ export function createZombieController({
   function destroy() {
     clearWaypoint();
     sprite.destroy();
+  }
+
+  function applyDamage(amount) {
+    return health.applyDamage(amount);
+  }
+
+  function heal(amount) {
+    return health.heal(amount);
+  }
+
+  function setCurrentHp(nextCurrentHp) {
+    return health.setCurrentHp(nextCurrentHp);
+  }
+
+  function setMaxHp(nextMaxHp, options) {
+    return health.setMaxHp(nextMaxHp, options);
   }
 
   return {
@@ -307,6 +363,15 @@ export function createZombieController({
     rotateHeading,
     getVisionCone,
     getColliderWorld,
+    getMoveSpeedTilesPerSecond: () => moveSpeed,
+    getHealthState: () => health.getState(),
+    getCurrentHp: () => health.getCurrentHp(),
+    getMaxHp: () => health.getMaxHp(),
+    isDead: () => health.isDead(),
+    applyDamage,
+    heal,
+    setCurrentHp,
+    setMaxHp,
     getDebugState,
     destroy,
   };
