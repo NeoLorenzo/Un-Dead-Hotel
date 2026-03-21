@@ -78,6 +78,7 @@ const FIRST_CONTACT_GUEST_MIN_SPAWN_RADIUS_TILES =
 const FIRST_CONTACT_GUEST_MAX_SPAWN_RADIUS_TILES =
   FIRST_CONTACT_ZOMBIE_MAX_SPAWN_RADIUS_TILES;
 const DEBUG_TOGGLE_KEYS = new Set(["`", "~"]);
+const PAUSE_TOGGLE_CODES = new Set(["Space"]);
 const RUNTIME_MODE_ZOMBIE_WANDER = "zombie_wander";
 const RUNTIME_MODE_FIRST_CONTACT = "first_contact";
 const RUNTIME_MODE = RUNTIME_MODE_FIRST_CONTACT;
@@ -364,12 +365,14 @@ function createRuntimeScene(Phaser) {
       this.humanManagerDebugBridge = null;
       this.zombieManagerDebugBridge = null;
       this.debugOverlayEnabled = false;
+      this.simulationPaused = false;
       this.diagnosticsTextVisible = true;
       this.debugVisionEnabled = true;
       this.handlePointerDown = null;
       this.handlePointerMove = null;
       this.handlePointerUp = null;
       this.handleDebugKeyDown = null;
+      this.handlePauseKeyDown = null;
       this.handleDiagnosticsTextToggleClick = null;
       this.handleVisionDebugToggleClick = null;
     }
@@ -831,6 +834,15 @@ function createRuntimeScene(Phaser) {
         this.dirty = true;
       };
       this.input.keyboard.on("keydown", this.handleDebugKeyDown);
+      this.handlePauseKeyDown = (event) => {
+        if (!PAUSE_TOGGLE_CODES.has(event?.code) || event?.repeat) {
+          return;
+        }
+        event.preventDefault();
+        this.simulationPaused = !this.simulationPaused;
+        this.dirty = true;
+      };
+      this.input.keyboard.on("keydown", this.handlePauseKeyDown);
 
       this.input.on("wheel", (_pointer, _go, _dx, dy) => {
         const direction = Math.sign(-dy);
@@ -877,6 +889,10 @@ function createRuntimeScene(Phaser) {
         if (this.handleDebugKeyDown) {
           this.input.keyboard.off("keydown", this.handleDebugKeyDown);
           this.handleDebugKeyDown = null;
+        }
+        if (this.handlePauseKeyDown) {
+          this.input.keyboard.off("keydown", this.handlePauseKeyDown);
+          this.handlePauseKeyDown = null;
         }
         if (this.handleDiagnosticsTextToggleClick && diagnosticsTextToggleElement) {
           diagnosticsTextToggleElement.removeEventListener(
@@ -984,28 +1000,30 @@ function createRuntimeScene(Phaser) {
         this.dirty = true;
       }
 
-      if (this.humanManager && this.humanManager.update(dt)) {
-        this.dirty = true;
-      }
       if (this.humanCommandController && this.humanCommandController.update(dt)) {
         this.dirty = true;
       }
-      if (this.zombieManager && this.zombieManager.update(dt)) {
-        this.dirty = true;
-      }
+      if (!this.simulationPaused) {
+        if (this.humanManager && this.humanManager.update(dt)) {
+          this.dirty = true;
+        }
+        if (this.zombieManager && this.zombieManager.update(dt)) {
+          this.dirty = true;
+        }
 
-      const livingHumanCount = this.humanManager
-        ? this.humanManager.getLivingHumanCount()
-        : this.humanController &&
-            typeof this.humanController.isDead === "function" &&
-            !this.humanController.isDead()
-          ? 1
-          : 0;
-      const shouldShowGameOver = livingHumanCount <= 0;
-      if (shouldShowGameOver !== this.gameOverActive) {
-        this.gameOverActive = shouldShowGameOver;
-        if (this.gameOverOverlay) {
-          this.gameOverOverlay.setVisible(this.gameOverActive);
+        const livingHumanCount = this.humanManager
+          ? this.humanManager.getLivingHumanCount()
+          : this.humanController &&
+              typeof this.humanController.isDead === "function" &&
+              !this.humanController.isDead()
+            ? 1
+            : 0;
+        const shouldShowGameOver = livingHumanCount <= 0;
+        if (shouldShowGameOver !== this.gameOverActive) {
+          this.gameOverActive = shouldShowGameOver;
+          if (this.gameOverOverlay) {
+            this.gameOverOverlay.setVisible(this.gameOverActive);
+          }
         }
       }
 
