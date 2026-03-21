@@ -98,6 +98,8 @@ const TILE_COLOR_ROOM_THIN_WALL = "#8f8f8f";
 const metaElement = document.getElementById("game-meta");
 const mountElement = document.getElementById("game-root");
 const runtimeOverlayElement = document.getElementById("runtime-overlay");
+const diagnosticsTextToggleElement = document.getElementById("toggle-diagnostics-text");
+const visionDebugToggleElement = document.getElementById("toggle-debug-vision");
 
 if (!mountElement) {
   throw new Error("Game runtime mount element not found.");
@@ -359,11 +361,93 @@ function createRuntimeScene(Phaser) {
       this.gameOverOverlay = null;
       this.gameOverActive = false;
       this.humanCommandDebugBridge = null;
+      this.humanManagerDebugBridge = null;
+      this.zombieManagerDebugBridge = null;
       this.debugOverlayEnabled = false;
+      this.diagnosticsTextVisible = true;
+      this.debugVisionEnabled = true;
       this.handlePointerDown = null;
       this.handlePointerMove = null;
       this.handlePointerUp = null;
       this.handleDebugKeyDown = null;
+      this.handleDiagnosticsTextToggleClick = null;
+      this.handleVisionDebugToggleClick = null;
+    }
+
+    applyDebugUiSettings() {
+      if (
+        this.firstContactDiagnosticsPanel &&
+        typeof this.firstContactDiagnosticsPanel.setTextVisible === "function"
+      ) {
+        this.firstContactDiagnosticsPanel.setTextVisible(this.diagnosticsTextVisible);
+      }
+
+      if (
+        this.humanDebugOverlay &&
+        typeof this.humanDebugOverlay.setVisionDebugEnabled === "function"
+      ) {
+        this.humanDebugOverlay.setVisionDebugEnabled(this.debugVisionEnabled);
+      }
+
+      if (
+        this.zombieDebugOverlay &&
+        typeof this.zombieDebugOverlay.setVisionDebugEnabled === "function"
+      ) {
+        this.zombieDebugOverlay.setVisionDebugEnabled(this.debugVisionEnabled);
+      }
+    }
+
+    refreshDebugControlButtons() {
+      if (diagnosticsTextToggleElement) {
+        const diagnosticsSupported =
+          this.firstContactDiagnosticsPanel &&
+          typeof this.firstContactDiagnosticsPanel.setTextVisible === "function";
+        diagnosticsTextToggleElement.disabled = !diagnosticsSupported;
+        diagnosticsTextToggleElement.textContent = diagnosticsSupported
+          ? `Diagnostics Text: ${this.diagnosticsTextVisible ? "On" : "Off"}`
+          : "Diagnostics Text: Unavailable";
+        diagnosticsTextToggleElement.setAttribute(
+          "aria-pressed",
+          this.diagnosticsTextVisible ? "true" : "false"
+        );
+      }
+
+      if (visionDebugToggleElement) {
+        const visionSupported =
+          (this.humanDebugOverlay &&
+            typeof this.humanDebugOverlay.setVisionDebugEnabled === "function") ||
+          (this.zombieDebugOverlay &&
+            typeof this.zombieDebugOverlay.setVisionDebugEnabled === "function");
+        visionDebugToggleElement.disabled = !visionSupported;
+        visionDebugToggleElement.textContent = visionSupported
+          ? `Vision Cones/Rays: ${this.debugVisionEnabled ? "On" : "Off"}`
+          : "Vision Cones/Rays: Unavailable";
+        visionDebugToggleElement.setAttribute(
+          "aria-pressed",
+          this.debugVisionEnabled ? "true" : "false"
+        );
+      }
+    }
+
+    buildFrameDebugSnapshot() {
+      return {
+        humanManager:
+          typeof this.humanManager?.getDebugState === "function"
+            ? this.humanManager.getDebugState()
+            : null,
+        zombieManager:
+          typeof this.zombieManager?.getDebugState === "function"
+            ? this.zombieManager.getDebugState()
+            : null,
+        humanCommand:
+          typeof this.humanCommandController?.getDebugState === "function"
+            ? this.humanCommandController.getDebugState()
+            : null,
+        primaryHuman:
+          typeof this.humanController?.getDebugState === "function"
+            ? this.humanController.getDebugState()
+            : null,
+      };
     }
 
     create() {
@@ -380,31 +464,11 @@ function createRuntimeScene(Phaser) {
         const getZombiePerceptionTargets = () => {
           if (
             !this.zombieManager ||
-            typeof this.zombieManager.getDebugState !== "function"
+            typeof this.zombieManager.getPerceptionTargets !== "function"
           ) {
             return [];
           }
-          const zombieDebug = this.zombieManager.getDebugState();
-          const zombies = Array.isArray(zombieDebug?.zombies) ? zombieDebug.zombies : [];
-          const targets = [];
-          for (const zombie of zombies) {
-            const world = zombie?.worldPosition || null;
-            const health = zombie?.health || null;
-            if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
-              continue;
-            }
-            if (health?.isDead === true) {
-              continue;
-            }
-            targets.push({
-              id: zombie?.id,
-              world: {
-                x: world.x,
-                y: world.y,
-              },
-            });
-          }
-          return targets;
+          return this.zombieManager.getPerceptionTargets();
         };
         const naturalGuestPolicy =
           RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
@@ -506,8 +570,16 @@ function createRuntimeScene(Phaser) {
             }
           },
         };
+        this.humanManagerDebugBridge = {
+          setEnabled: (enabled) => {
+            if (this.humanManager && typeof this.humanManager.setDebugEnabled === "function") {
+              this.humanManager.setDebugEnabled(enabled);
+            }
+          },
+        };
         this.debugController.addRenderer(this.humanDebugOverlay);
         this.debugController.addRenderer(this.humanCommandDebugBridge);
+        this.debugController.addRenderer(this.humanManagerDebugBridge);
       }
 
       if (ZOMBIE_SYSTEMS_ENABLED) {
@@ -607,7 +679,18 @@ function createRuntimeScene(Phaser) {
           runtime: this.runtime,
           zombieManager: this.zombieManager,
         });
+        this.zombieManagerDebugBridge = {
+          setEnabled: (enabled) => {
+            if (
+              this.zombieManager &&
+              typeof this.zombieManager.setDebugEnabled === "function"
+            ) {
+              this.zombieManager.setDebugEnabled(enabled);
+            }
+          },
+        };
         this.debugController.addRenderer(this.zombieDebugOverlay);
+        this.debugController.addRenderer(this.zombieManagerDebugBridge);
       }
 
       this.agentHpBarOverlay = createAgentHpBarOverlay({
@@ -630,6 +713,31 @@ function createRuntimeScene(Phaser) {
           getGameOverActive: () => this.gameOverActive,
         });
         this.debugController.addRenderer(this.firstContactDiagnosticsPanel);
+      }
+      this.applyDebugUiSettings();
+      this.refreshDebugControlButtons();
+
+      if (diagnosticsTextToggleElement) {
+        this.handleDiagnosticsTextToggleClick = () => {
+          this.diagnosticsTextVisible = !this.diagnosticsTextVisible;
+          this.applyDebugUiSettings();
+          this.refreshDebugControlButtons();
+          this.dirty = true;
+        };
+        diagnosticsTextToggleElement.addEventListener(
+          "click",
+          this.handleDiagnosticsTextToggleClick
+        );
+      }
+
+      if (visionDebugToggleElement) {
+        this.handleVisionDebugToggleClick = () => {
+          this.debugVisionEnabled = !this.debugVisionEnabled;
+          this.applyDebugUiSettings();
+          this.refreshDebugControlButtons();
+          this.dirty = true;
+        };
+        visionDebugToggleElement.addEventListener("click", this.handleVisionDebugToggleClick);
       }
 
       if (HUMAN_SYSTEMS_ENABLED) {
@@ -770,6 +878,20 @@ function createRuntimeScene(Phaser) {
           this.input.keyboard.off("keydown", this.handleDebugKeyDown);
           this.handleDebugKeyDown = null;
         }
+        if (this.handleDiagnosticsTextToggleClick && diagnosticsTextToggleElement) {
+          diagnosticsTextToggleElement.removeEventListener(
+            "click",
+            this.handleDiagnosticsTextToggleClick
+          );
+          this.handleDiagnosticsTextToggleClick = null;
+        }
+        if (this.handleVisionDebugToggleClick && visionDebugToggleElement) {
+          visionDebugToggleElement.removeEventListener(
+            "click",
+            this.handleVisionDebugToggleClick
+          );
+          this.handleVisionDebugToggleClick = null;
+        }
         if (this.humanSelectionController) {
           this.humanSelectionController.destroy();
           this.humanSelectionController = null;
@@ -805,6 +927,8 @@ function createRuntimeScene(Phaser) {
         this.zombieDebugOverlay = null;
         this.firstContactDiagnosticsPanel = null;
         this.humanCommandDebugBridge = null;
+        this.humanManagerDebugBridge = null;
+        this.zombieManagerDebugBridge = null;
         this.chunkImages.clear();
         this.chunkTextures.clear();
       });
@@ -956,6 +1080,12 @@ function createRuntimeScene(Phaser) {
       const width = this.scale.width;
       const height = this.scale.height;
       const snapshot = this.runtime.getFrameSnapshot(width, height, this.tilePixels);
+      const debugSnapshot =
+        this.debugController &&
+        typeof this.debugController.isEnabled === "function" &&
+        this.debugController.isEnabled()
+          ? this.buildFrameDebugSnapshot()
+          : null;
       const visibleKeys = new Set();
       if (!this.chunkTextureTierLocked) {
         this.chunkTextureTilePixels = resolveChunkTextureTilePixels(
@@ -1070,6 +1200,7 @@ function createRuntimeScene(Phaser) {
           tilePixels: this.tilePixels,
           viewWidthPx: width,
           viewHeightPx: height,
+          debugSnapshot,
         });
       }
       if (this.zombieManager) {
@@ -1086,6 +1217,7 @@ function createRuntimeScene(Phaser) {
           tilePixels: this.tilePixels,
           viewWidthPx: width,
           viewHeightPx: height,
+          debugSnapshot,
         });
       }
 
@@ -1104,8 +1236,12 @@ function createRuntimeScene(Phaser) {
       if (metaElement) {
         const rendererType = this.game?.renderer?.type;
         const rendererLabel = resolveRendererLabel(Phaser, rendererType);
+        const measuredFps = this.game?.loop?.actualFps;
+        const fpsLabel = Number.isFinite(measuredFps)
+          ? measuredFps.toFixed(1)
+          : "n/a";
         metaElement.textContent +=
-          ` | Renderer: ${rendererLabel} | Pending chunk textures: ${pendingChunkTextures} | Phaser: ${Phaser.VERSION}`;
+          ` | Renderer: ${rendererLabel} | Pending chunk textures: ${pendingChunkTextures} | Phaser: ${Phaser.VERSION} | FPS: ${fpsLabel}`;
       }
     }
   };

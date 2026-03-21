@@ -30,37 +30,55 @@ export function createFirstContactDiagnosticsPanel({
   parentElement.appendChild(panel);
 
   let enabled = false;
+  let textVisible = true;
+
+  function refreshVisibility() {
+    panel.hidden = !(enabled && textVisible);
+  }
 
   function setEnabled(nextEnabled) {
     enabled = Boolean(nextEnabled);
-    panel.hidden = !enabled;
+    refreshVisibility();
     if (!enabled) {
       panel.textContent = "";
     }
+  }
+
+  function setTextVisible(nextVisible) {
+    textVisible = Boolean(nextVisible);
+    refreshVisibility();
+    if (!textVisible) {
+      panel.textContent = "";
+    }
+  }
+
+  function isTextVisible() {
+    return textVisible;
   }
 
   function isEnabled() {
     return enabled;
   }
 
-  function renderFrame() {
-    if (!enabled) {
+  function renderFrame(frameState = {}) {
+    if (!enabled || !textVisible) {
       return;
     }
 
+    const debugSnapshot = frameState?.debugSnapshot || null;
     const lines = ["First Contact Diagnostics"];
-    const humanManagerDebug =
-      typeof humanManager?.getDebugState === "function"
+    const humanManagerDebug = debugSnapshot?.humanManager ||
+      (typeof humanManager?.getDebugState === "function"
         ? humanManager.getDebugState()
-        : null;
-    const humanCommandDebug =
-      typeof humanCommandController?.getDebugState === "function"
+        : null);
+    const humanCommandDebug = debugSnapshot?.humanCommand ||
+      (typeof humanCommandController?.getDebugState === "function"
         ? humanCommandController.getDebugState()
-        : null;
-    const humanDebug =
-      typeof humanController?.getDebugState === "function"
+        : null);
+    const humanDebug = debugSnapshot?.primaryHuman ||
+      (typeof humanController?.getDebugState === "function"
         ? humanController.getDebugState()
-        : null;
+        : null);
     const primaryHumanFromManager = Array.isArray(humanManagerDebug?.humans)
       ? humanManagerDebug.humans.find((human) => human?.id === "survivor_primary") ||
         humanManagerDebug.humans.find((human) => human?.role === "survivor")
@@ -203,10 +221,10 @@ export function createFirstContactDiagnosticsPanel({
       typeof getGameOverActive === "function" ? getGameOverActive() === true : false;
     lines.push(`Game Over Active: ${gameOverActive}`);
 
-    const zombieDebug =
-      typeof zombieManager?.getDebugState === "function"
+    const zombieDebug = debugSnapshot?.zombieManager ||
+      (typeof zombieManager?.getDebugState === "function"
         ? zombieManager.getDebugState()
-        : null;
+        : null);
     if (!zombieDebug) {
       lines.push("Zombies: unavailable");
       panel.textContent = lines.join("\n");
@@ -283,7 +301,9 @@ export function createFirstContactDiagnosticsPanel({
 
   return {
     setEnabled,
+    setTextVisible,
     isEnabled,
+    isTextVisible,
     renderFrame,
     clear,
     destroy,

@@ -136,8 +136,23 @@ export function createAgentHpBarOverlay({
   const overlay = scene.add.graphics();
   overlay.setDepth(96);
 
-  function collectHumanDebugStates() {
+  function collectHumanDebugStates(debugSnapshot = null) {
     const debugStates = [];
+    const humanManagerSnapshot = debugSnapshot?.humanManager || null;
+    if (Array.isArray(humanManagerSnapshot?.humans)) {
+      for (const human of humanManagerSnapshot.humans) {
+        if (human?.debug) {
+          debugStates.push(human.debug);
+        }
+      }
+      if (debugStates.length > 0) {
+        return debugStates;
+      }
+    }
+    if (debugSnapshot?.primaryHuman) {
+      debugStates.push(debugSnapshot.primaryHuman);
+      return debugStates;
+    }
     if (
       humanManager &&
       typeof humanManager.getHumanControllers === "function"
@@ -164,7 +179,8 @@ export function createAgentHpBarOverlay({
   }
 
   function drawHumanBars(viewState) {
-    const humanDebugStates = collectHumanDebugStates();
+    const debugSnapshot = viewState?.debugSnapshot || null;
+    const humanDebugStates = collectHumanDebugStates(debugSnapshot);
     for (const humanDebug of humanDebugStates) {
       const health = humanDebug?.health;
       const world = humanDebug?.worldPosition;
@@ -183,10 +199,13 @@ export function createAgentHpBarOverlay({
   }
 
   function drawZombieBars(viewState) {
+    const debugSnapshot = viewState?.debugSnapshot || null;
     if (!zombieManager || typeof zombieManager.getDebugState !== "function") {
-      return;
+      if (!debugSnapshot?.zombieManager) {
+        return;
+      }
     }
-    const debugState = zombieManager.getDebugState();
+    const debugState = debugSnapshot?.zombieManager || zombieManager.getDebugState();
     const zombies = Array.isArray(debugState?.zombies) ? debugState.zombies : [];
     for (const zombie of zombies) {
       const health = zombie?.health;

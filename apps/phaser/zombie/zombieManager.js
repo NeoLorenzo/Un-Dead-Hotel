@@ -225,6 +225,7 @@ export function createZombieManager({
   let lastFirstContactCycle = null;
   let lastPursuitCycle = null;
   let lastAttackCycle = null;
+  let debugEnabled = false;
   const pursuitEnabled = Boolean(pursuitPolicy?.enabled);
   const pursuitLineCheckStepTiles = Math.max(
     0.05,
@@ -1072,11 +1073,13 @@ export function createZombieManager({
     wanderStateById.set(zombie.getId(), createInitialWanderState(zombie.getId()));
     pursuitStateById.set(zombie.getId(), createInitialPursuitState());
     attackStateById.set(zombie.getId(), createInitialAttackState());
-    waypointSelectionDebugById.set(zombie.getId(), {
-      reason: "spawned",
-      attempts: 0,
-      candidates: [],
-    });
+    if (debugEnabled) {
+      waypointSelectionDebugById.set(zombie.getId(), {
+        reason: "spawned",
+        attempts: 0,
+        candidates: [],
+      });
+    }
     const resolvedSpawn = zombie.getWorldPosition();
     lastSpawnAttempt = {
       accepted: true,
@@ -1145,6 +1148,29 @@ export function createZombieManager({
     return changed;
   }
 
+  function normalizeWaypointSelection(selection) {
+    if (!selection) {
+      return {
+        waypoint: null,
+        debug: null,
+      };
+    }
+    if (
+      Number.isFinite(selection?.x) &&
+      Number.isFinite(selection?.y) &&
+      selection?.waypoint === undefined
+    ) {
+      return {
+        waypoint: selection,
+        debug: null,
+      };
+    }
+    return {
+      waypoint: selection?.waypoint || null,
+      debug: selection?.debug || null,
+    };
+  }
+
   function update(dtSeconds) {
     function registerWaypointFailure(zombie, state, debugPayload) {
       state.noCandidateStreak += 1;
@@ -1154,6 +1180,9 @@ export function createZombieManager({
         activateRecovery(state);
       }
       activateRepickCooldown(state);
+      if (!debugEnabled) {
+        return;
+      }
       waypointSelectionDebugById.set(zombie.getId(), {
         ...debugPayload,
         cooldownRemainingSeconds: state.repickCooldownRemainingSeconds,
@@ -1162,6 +1191,9 @@ export function createZombieManager({
     }
 
     function recordRepickCooldownDebug(zombie, state) {
+      if (!debugEnabled) {
+        return;
+      }
       waypointSelectionDebugById.set(zombie.getId(), {
         reason: "repick_cooldown",
         attempts: 0,
@@ -1209,11 +1241,12 @@ export function createZombieManager({
           continue;
         }
         const selection = wanderPlanner.pickWaypointForZombie(zombie, {
-          includeDebug: true,
+          includeDebug: debugEnabled,
           blockedSectorsRadians: state.failedSectors,
         });
-        const debugSelection = selection?.debug || null;
-        const waypoint = selection?.waypoint || null;
+        const normalizedSelection = normalizeWaypointSelection(selection);
+        const debugSelection = normalizedSelection.debug;
+        const waypoint = normalizedSelection.waypoint;
         if (waypoint) {
           const accepted = zombie.setWaypointWorld(waypoint);
           if (accepted) {
@@ -1221,11 +1254,13 @@ export function createZombieManager({
             state.recoveryRemainingSeconds = 0;
             state.repickCooldownRemainingSeconds = 0;
             changed = true;
-            waypointSelectionDebugById.set(zombie.getId(), {
-              ...debugSelection,
-              cooldownRemainingSeconds: 0,
-              recoveryActive: false,
-            });
+            if (debugEnabled) {
+              waypointSelectionDebugById.set(zombie.getId(), {
+                ...debugSelection,
+                cooldownRemainingSeconds: 0,
+                recoveryActive: false,
+              });
+            }
           } else {
             registerWaypointFailure(
               zombie,
@@ -1251,45 +1286,6 @@ export function createZombieManager({
     if (runAttackStep(dtSeconds)) {
       changed = true;
     }
-    for (const zombie of zombies) {
-      if (!zombie.hasWaypoint() && shouldUseWanderForZombie(zombie.getId())) {
-        const state = getWanderState(zombie.getId());
-        if (state.repickCooldownRemainingSeconds > 0) {
-          recordRepickCooldownDebug(zombie, state);
-          continue;
-        }
-        const selection = wanderPlanner.pickWaypointForZombie(zombie, {
-          includeDebug: true,
-          blockedSectorsRadians: state.failedSectors,
-        });
-        const debugSelection = selection?.debug || null;
-        const waypoint = selection?.waypoint || null;
-        if (waypoint) {
-          const accepted = zombie.setWaypointWorld(waypoint);
-          if (accepted) {
-            state.noCandidateStreak = 0;
-            state.recoveryRemainingSeconds = 0;
-            state.repickCooldownRemainingSeconds = 0;
-            changed = true;
-            waypointSelectionDebugById.set(zombie.getId(), {
-              ...debugSelection,
-              cooldownRemainingSeconds: 0,
-              recoveryActive: false,
-            });
-          } else {
-            registerWaypointFailure(
-              zombie,
-              state,
-              buildControllerRejectedDebug(selection)
-            );
-          }
-        } else {
-          registerWaypointFailure(zombie, state, {
-            ...debugSelection,
-          });
-        }
-      }
-    }
     return changed;
   }
 
@@ -1311,6 +1307,30 @@ export function createZombieManager({
 
   function getZombieCount() {
     return zombies.length;
+  }
+
+  function getPerceptionTargets() {
+    const targets = [];
+    for (const zombie of zombies) {
+      if (typeof zombie?.isDead === "function" && zombie.isDead()) {
+        continue;
+      }
+      if (typeof zombie?.getWorldPosition !== "function") {
+        continue;
+      }
+      const world = zombie.getWorldPosition();
+      if (!isFiniteNumber(world?.x) || !isFiniteNumber(world?.y)) {
+        continue;
+      }
+      targets.push({
+        id: zombie.getId(),
+        world: {
+          x: world.x,
+          y: world.y,
+        },
+      });
+    }
+    return targets;
   }
 
   function findZombieById(zombieId) {
@@ -1335,11 +1355,13 @@ export function createZombieManager({
     state.noCandidateStreak = 0;
     state.recoveryRemainingSeconds = 0;
     state.repickCooldownRemainingSeconds = 0;
-    waypointSelectionDebugById.set(zombieId, {
-      reason: accepted ? "manual_override" : "manual_override_rejected",
-      attempts: 0,
-      candidates: [],
-    });
+    if (debugEnabled) {
+      waypointSelectionDebugById.set(zombieId, {
+        reason: accepted ? "manual_override" : "manual_override_rejected",
+        attempts: 0,
+        candidates: [],
+      });
+    }
     return accepted;
   }
 
@@ -1352,12 +1374,25 @@ export function createZombieManager({
     const state = getWanderState(zombieId);
     state.noCandidateStreak = 0;
     state.repickCooldownRemainingSeconds = 0;
-    waypointSelectionDebugById.set(zombieId, {
-      reason: "manual_clear",
-      attempts: 0,
-      candidates: [],
-    });
+    if (debugEnabled) {
+      waypointSelectionDebugById.set(zombieId, {
+        reason: "manual_clear",
+        attempts: 0,
+        candidates: [],
+      });
+    }
     return true;
+  }
+
+  function setDebugEnabled(enabled) {
+    debugEnabled = Boolean(enabled);
+    if (!debugEnabled) {
+      waypointSelectionDebugById.clear();
+    }
+  }
+
+  function isDebugEnabled() {
+    return debugEnabled;
   }
 
   function getDebugState() {
@@ -1557,8 +1592,11 @@ export function createZombieManager({
     update,
     syncToView,
     getZombieCount,
+    getPerceptionTargets,
     setZombieWaypoint,
     clearZombieWaypoint,
+    setDebugEnabled,
+    isDebugEnabled,
     getDebugState,
     destroy,
   };

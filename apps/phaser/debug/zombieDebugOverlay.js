@@ -251,66 +251,67 @@ function drawHeading(overlay, zombie, cameraTile, tilePixels, width, height) {
   overlay.strokePath();
 }
 
-function drawVisionCone(overlay, zombie, cameraTile, tilePixels, width, height, liveRaySamples = []) {
+function drawVisionCone(overlay, zombie, cameraTile, tilePixels, width, height) {
   const position = zombie?.worldPosition;
   if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
     return;
   }
-  const center = worldToScreen(position.x, position.y, cameraTile, tilePixels, width, height);
-  const raySamples = Array.isArray(liveRaySamples) ? liveRaySamples : [];
-  const clippedRays = raySamples.filter(
-    (ray) =>
-      !ray?.blockedBySector &&
-      Number(ray?.maxReach) > 0.000001 &&
-      Number.isFinite(ray?.x) &&
-      Number.isFinite(ray?.y)
-  );
-
-  overlay.fillStyle(CONE_FILL_COLOR, CONE_FILL_ALPHA);
-  overlay.lineStyle(Math.max(1, Math.round(tilePixels * 0.14)), CONE_STROKE_COLOR, CONE_STROKE_ALPHA);
-
-  if (clippedRays.length >= 2) {
-    overlay.beginPath();
-    overlay.moveTo(center.x, center.y);
-    for (const ray of clippedRays) {
-      const rayEnd = worldToScreen(ray.x, ray.y, cameraTile, tilePixels, width, height);
-      overlay.lineTo(rayEnd.x, rayEnd.y);
-    }
-    overlay.closePath();
-    overlay.fillPath();
-    overlay.strokePath();
-    return;
-  }
-
   const headingRadians = Number.isFinite(zombie?.headingRadians) ? zombie.headingRadians : 0;
   const coneAngleDegrees = Number(zombie?.visionConeAngleDegrees) || 90;
   const coneRangeTiles = Number(zombie?.visionConeRangeTiles) || 0;
   if (coneRangeTiles <= 0) {
     return;
   }
+  const center = worldToScreen(position.x, position.y, cameraTile, tilePixels, width, height);
+  const radiusPx = Math.max(0, coneRangeTiles * tilePixels);
+  if (radiusPx <= 0.000001) {
+    return;
+  }
   const halfAngleRadians = ((coneAngleDegrees * Math.PI) / 180) * 0.5;
-  const left = worldToScreen(
-    position.x + Math.cos(headingRadians - halfAngleRadians) * coneRangeTiles,
-    position.y + Math.sin(headingRadians - halfAngleRadians) * coneRangeTiles,
-    cameraTile,
-    tilePixels,
-    width,
-    height
-  );
-  const right = worldToScreen(
-    position.x + Math.cos(headingRadians + halfAngleRadians) * coneRangeTiles,
-    position.y + Math.sin(headingRadians + halfAngleRadians) * coneRangeTiles,
-    cameraTile,
-    tilePixels,
-    width,
-    height
+  overlay.fillStyle(CONE_FILL_COLOR, CONE_FILL_ALPHA);
+  overlay.lineStyle(
+    Math.max(1, Math.round(tilePixels * 0.14)),
+    CONE_STROKE_COLOR,
+    CONE_STROKE_ALPHA
   );
   overlay.beginPath();
   overlay.moveTo(center.x, center.y);
-  overlay.lineTo(left.x, left.y);
-  overlay.lineTo(right.x, right.y);
+  overlay.arc(
+    center.x,
+    center.y,
+    radiusPx,
+    headingRadians - halfAngleRadians,
+    headingRadians + halfAngleRadians,
+    false
+  );
   overlay.closePath();
   overlay.fillPath();
+  overlay.strokePath();
+}
+
+function drawTargetLockRay(overlay, zombie, cameraTile, tilePixels, width, height) {
+  const position = zombie?.worldPosition;
+  const pursuit = zombie?.pursuit || null;
+  const target = pursuit?.lastKnownWorld || null;
+  if (!pursuit?.hasLineOfSight) {
+    return;
+  }
+  if (
+    !position ||
+    !target ||
+    !Number.isFinite(position.x) ||
+    !Number.isFinite(position.y) ||
+    !Number.isFinite(target.x) ||
+    !Number.isFinite(target.y)
+  ) {
+    return;
+  }
+  const start = worldToScreen(position.x, position.y, cameraTile, tilePixels, width, height);
+  const end = worldToScreen(target.x, target.y, cameraTile, tilePixels, width, height);
+  overlay.lineStyle(Math.max(1, Math.round(tilePixels * 0.1)), RAY_OPEN_COLOR, 0.8);
+  overlay.beginPath();
+  overlay.moveTo(start.x, start.y);
+  overlay.lineTo(end.x, end.y);
   overlay.strokePath();
 }
 
@@ -493,6 +494,7 @@ export function createZombieDebugOverlay({
   const overlay = scene.add.graphics();
   overlay.setDepth(92);
   let enabled = false;
+  let visionDebugEnabled = true;
 
   function setEnabled(nextEnabled) {
     enabled = Boolean(nextEnabled);
@@ -505,11 +507,20 @@ export function createZombieDebugOverlay({
     return enabled;
   }
 
+  function setVisionDebugEnabled(nextEnabled) {
+    visionDebugEnabled = Boolean(nextEnabled);
+  }
+
+  function isVisionDebugEnabled() {
+    return visionDebugEnabled;
+  }
+
   function renderFrame({
     cameraTile,
     tilePixels,
     viewWidthPx,
     viewHeightPx,
+    debugSnapshot = null,
   }) {
     overlay.clear();
     if (!enabled) {
@@ -527,28 +538,20 @@ export function createZombieDebugOverlay({
       viewHeightPx
     );
 
-    const debugState = zombieManager.getDebugState?.() || { zombies: [] };
+    const debugState = debugSnapshot?.zombieManager || zombieManager.getDebugState?.() || { zombies: [] };
     const zombies = Array.isArray(debugState.zombies) ? debugState.zombies : [];
     for (const zombie of zombies) {
-      const liveConeRays = buildLiveClippedConeRays(runtime, zombie, LIVE_CONE_RAY_COUNT);
-      drawVisionCone(
-        overlay,
-        zombie,
-        cameraTile,
-        tilePixels,
-        viewWidthPx,
-        viewHeightPx,
-        liveConeRays
-      );
-      drawClippedConeRays(
-        overlay,
-        zombie,
-        cameraTile,
-        tilePixels,
-        viewWidthPx,
-        viewHeightPx,
-        liveConeRays
-      );
+      if (visionDebugEnabled) {
+        drawVisionCone(overlay, zombie, cameraTile, tilePixels, viewWidthPx, viewHeightPx);
+        drawTargetLockRay(
+          overlay,
+          zombie,
+          cameraTile,
+          tilePixels,
+          viewWidthPx,
+          viewHeightPx
+        );
+      }
       drawFailedSectors(overlay, zombie, cameraTile, tilePixels, viewWidthPx, viewHeightPx);
       drawWaypointSelectionDiagnostics(
         overlay,
@@ -573,6 +576,8 @@ export function createZombieDebugOverlay({
   return {
     setEnabled,
     isEnabled,
+    setVisionDebugEnabled,
+    isVisionDebugEnabled,
     renderFrame,
     clear: () => overlay.clear(),
     destroy,

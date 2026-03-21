@@ -243,6 +243,7 @@ export function createHumanDebugOverlay({
   const overlay = scene.add.graphics();
   overlay.setDepth(94);
   let enabled = false;
+  let visionDebugEnabled = true;
 
   function setEnabled(nextEnabled) {
     enabled = Boolean(nextEnabled);
@@ -253,6 +254,14 @@ export function createHumanDebugOverlay({
 
   function isEnabled() {
     return enabled;
+  }
+
+  function setVisionDebugEnabled(nextEnabled) {
+    visionDebugEnabled = Boolean(nextEnabled);
+  }
+
+  function isVisionDebugEnabled() {
+    return visionDebugEnabled;
   }
 
   function drawCollisionObstacles(cameraTile, tilePixels, width, height) {
@@ -363,17 +372,17 @@ function drawVisitedNodes(visitedNodes, cameraTile, tilePixels, width, height) {
     overlay.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w, rect.h);
   }
 
-  function drawVisionCone(
-    centerWorld,
-    headingRadians,
-    visionCone,
-    detected,
-    raySamples,
-    cameraTile,
-    tilePixels,
-    width,
-    height
-  ) {
+function drawVisionCone(
+  centerWorld,
+  headingRadians,
+  visionCone,
+  detected,
+  _raySamples,
+  cameraTile,
+  tilePixels,
+  width,
+  height
+) {
     if (!centerWorld || !visionCone) {
       return;
     }
@@ -414,33 +423,25 @@ function drawVisitedNodes(visitedNodes, cameraTile, tilePixels, width, height) {
       strokeColor,
       strokeAlpha
     );
-    const clippedRays = Array.isArray(raySamples)
-      ? raySamples.filter(
-          (ray) =>
-            !ray?.blockedBySector &&
-            Number(ray?.maxReach) > 0.000001 &&
-            Number.isFinite(ray?.x) &&
-            Number.isFinite(ray?.y)
-        )
-      : [];
-    if (clippedRays.length >= 2) {
-      overlay.beginPath();
-      overlay.moveTo(center.x, center.y);
-      for (const ray of clippedRays) {
-        const rayEnd = worldToScreen(
-          ray.x,
-          ray.y,
-          cameraTile,
-          tilePixels,
-          width,
-          height
-        );
-        overlay.lineTo(rayEnd.x, rayEnd.y);
-      }
-      overlay.closePath();
-      overlay.fillPath();
-      overlay.strokePath();
+    const heading = Number.isFinite(headingRadians) ? headingRadians : 0;
+    const halfAngleRadians = ((angleDegrees * Math.PI) / 180) * 0.5;
+    const radiusPx = Math.max(0, rangeTiles * tilePixels);
+    if (radiusPx <= 0.000001) {
+      return;
     }
+    overlay.beginPath();
+    overlay.moveTo(center.x, center.y);
+    overlay.arc(
+      center.x,
+      center.y,
+      radiusPx,
+      heading - halfAngleRadians,
+      heading + halfAngleRadians,
+      false
+    );
+    overlay.closePath();
+    overlay.fillPath();
+    overlay.strokePath();
   }
 
   function drawVisionRays(
@@ -818,32 +819,19 @@ function drawVisitedNodes(visitedNodes, cameraTile, tilePixels, width, height) {
       };
       const perceptionState = perceptionById.get(human.id) || null;
       const detected = perceptionState?.detected === true;
-      const liveConeRays = buildLiveClippedConeRays(
-        runtime,
-        debug,
-        HUMAN_VISION_RAY_COUNT
-      );
-
-      drawVisionCone(
-        centerWorld,
-        headingRadians,
-        visionCone,
-        detected,
-        liveConeRays,
-        cameraTile,
-        tilePixels,
-        width,
-        height
-      );
-      drawVisionRays(
-        centerWorld,
-        detected,
-        liveConeRays,
-        cameraTile,
-        tilePixels,
-        width,
-        height
-      );
+      if (visionDebugEnabled) {
+        drawVisionCone(
+          centerWorld,
+          headingRadians,
+          visionCone,
+          detected,
+          null,
+          cameraTile,
+          tilePixels,
+          width,
+          height
+        );
+      }
       drawGuestFailedSectors(debug, cameraTile, tilePixels, width, height);
       drawGuestWaypointSelectionDiagnostics(debug, cameraTile, tilePixels, width, height);
       drawGuestPathDiagnostics(debug, cameraTile, tilePixels, width, height);
@@ -858,7 +846,7 @@ function drawVisitedNodes(visitedNodes, cameraTile, tilePixels, width, height) {
         height
       );
       drawGuestRecoveryIndicator(debug, cameraTile, tilePixels, width, height);
-      if (detected) {
+      if (visionDebugEnabled && detected) {
         drawTargetLockLine(
           centerWorld,
           perceptionState?.targetWorld || null,
@@ -876,6 +864,7 @@ function drawVisitedNodes(visitedNodes, cameraTile, tilePixels, width, height) {
     tilePixels,
     viewWidthPx,
     viewHeightPx,
+    debugSnapshot = null,
   }) {
     overlay.clear();
     if (!enabled) {
@@ -891,12 +880,12 @@ function drawVisitedNodes(visitedNodes, cameraTile, tilePixels, width, height) {
       drawCollisionObstacles(cameraTile, tilePixels, viewWidthPx, viewHeightPx);
     }
 
-    const commandDebug = commandController?.getDebugState?.() || null;
-    const humanDebug = humanController.getDebugState();
-    const humanManagerDebug =
-      typeof humanManager?.getDebugState === "function"
+    const commandDebug = debugSnapshot?.humanCommand || commandController?.getDebugState?.() || null;
+    const humanDebug = debugSnapshot?.primaryHuman || humanController.getDebugState();
+    const humanManagerDebug = debugSnapshot?.humanManager ||
+      (typeof humanManager?.getDebugState === "function"
         ? humanManager.getDebugState()
-        : null;
+        : null);
 
     drawVisitedNodes(
       commandDebug?.lastPathDebug?.visitedCells || [],
@@ -939,6 +928,8 @@ function drawVisitedNodes(visitedNodes, cameraTile, tilePixels, width, height) {
   return {
     setEnabled,
     isEnabled,
+    setVisionDebugEnabled,
+    isVisionDebugEnabled,
     renderFrame,
     clear: () => overlay.clear(),
     destroy,

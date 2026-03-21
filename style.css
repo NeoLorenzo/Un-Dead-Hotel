@@ -281,6 +281,33 @@ h1 {
   pointer-events: auto;
 }
 
+#runtime-debug-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  pointer-events: auto;
+}
+
+.runtime-toggle-button {
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 6px 10px;
+  border: 1px solid #777777;
+  background: #f5f5f5;
+  color: #111111;
+  cursor: pointer;
+}
+
+.runtime-toggle-button:hover:enabled {
+  background: #ebebeb;
+}
+
+.runtime-toggle-button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 #game-meta {
   margin: 0;
   font-size: 12px;

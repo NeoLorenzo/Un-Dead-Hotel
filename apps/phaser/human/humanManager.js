@@ -205,6 +205,7 @@ export function createHumanManager({
   let lastGuestBehaviorCycle = null;
   let totalGuestConversions = 0;
   let lastGuestConversionCycle = null;
+  let debugEnabled = false;
 
   function createInitialGuestWanderState(humanId) {
     return {
@@ -936,6 +937,29 @@ export function createHumanManager({
     return state;
   }
 
+  function normalizeWaypointSelection(selection) {
+    if (!selection) {
+      return {
+        waypoint: null,
+        debug: null,
+      };
+    }
+    if (
+      Number.isFinite(selection?.x) &&
+      Number.isFinite(selection?.y) &&
+      selection?.waypoint === undefined
+    ) {
+      return {
+        waypoint: selection,
+        debug: null,
+      };
+    }
+    return {
+      waypoint: selection?.waypoint || null,
+      debug: selection?.debug || null,
+    };
+  }
+
   function runGuestBehaviorStep(dtSeconds, { recordCycle = true } = {}) {
     function registerGuestWaypointFailure(
       guestId,
@@ -950,6 +974,9 @@ export function createHumanManager({
         activateGuestRecovery(state);
       }
       activateGuestRepickCooldown(state);
+      if (!debugEnabled) {
+        return;
+      }
       guestWaypointSelectionDebugById.set(guestId, {
         ...debugPayload,
         cooldownRemainingSeconds: state.repickCooldownRemainingSeconds,
@@ -958,6 +985,9 @@ export function createHumanManager({
     }
 
     function recordGuestRepickCooldownDebug(guestId, state) {
+      if (!debugEnabled) {
+        return;
+      }
       guestWaypointSelectionDebugById.set(guestId, {
         reason: "repick_cooldown",
         attempts: 0,
@@ -1044,7 +1074,7 @@ export function createHumanManager({
       if (modeChanged) {
         behavior.mode = desiredMode;
         behavior.replanCooldownSeconds = 0;
-        if (desiredMode === "flee") {
+        if (debugEnabled && desiredMode === "flee") {
           guestWaypointSelectionDebugById.set(guest.id, {
             reason: "flee_mode",
             attempts: 0,
@@ -1096,23 +1126,26 @@ export function createHumanManager({
             getVisionCone: () => controller.getVisionCone(),
           },
           {
-            includeDebug: true,
+            includeDebug: debugEnabled,
             blockedSectorsRadians: wanderState.failedSectors,
           }
         );
-        const debugSelection = fleeSelection?.debug || null;
-        const fleeWaypoint = fleeSelection?.waypoint || null;
+        const normalizedFleeSelection = normalizeWaypointSelection(fleeSelection);
+        const debugSelection = normalizedFleeSelection.debug;
+        const fleeWaypoint = normalizedFleeSelection.waypoint;
         if (fleeWaypoint) {
           const accepted = controller.setWaypointWorld(fleeWaypoint);
           if (accepted) {
             wanderState.noCandidateStreak = 0;
             wanderState.recoveryRemainingSeconds = 0;
             wanderState.repickCooldownRemainingSeconds = 0;
-            guestWaypointSelectionDebugById.set(guest.id, {
-              ...debugSelection,
-              cooldownRemainingSeconds: 0,
-              recoveryActive: false,
-            });
+            if (debugEnabled) {
+              guestWaypointSelectionDebugById.set(guest.id, {
+                ...debugSelection,
+                cooldownRemainingSeconds: 0,
+                recoveryActive: false,
+              });
+            }
             behavior.replanCooldownSeconds = guestFleeReplanSeconds;
             behavior.lastPlanReason = debugSelection?.reason || "planned";
             replansSucceeded += 1;
@@ -1146,22 +1179,25 @@ export function createHumanManager({
       }
 
       const selection = guestWanderPlanner.pickWaypointForZombie(controller, {
-        includeDebug: true,
+        includeDebug: debugEnabled,
         blockedSectorsRadians: wanderState.failedSectors,
       });
-      const debugSelection = selection?.debug || null;
-      const waypoint = selection?.waypoint || null;
+      const normalizedSelection = normalizeWaypointSelection(selection);
+      const debugSelection = normalizedSelection.debug;
+      const waypoint = normalizedSelection.waypoint;
       if (waypoint) {
         const accepted = controller.setWaypointWorld(waypoint);
         if (accepted) {
           wanderState.noCandidateStreak = 0;
           wanderState.recoveryRemainingSeconds = 0;
           wanderState.repickCooldownRemainingSeconds = 0;
-          guestWaypointSelectionDebugById.set(guest.id, {
-            ...debugSelection,
-            cooldownRemainingSeconds: 0,
-            recoveryActive: false,
-          });
+          if (debugEnabled) {
+            guestWaypointSelectionDebugById.set(guest.id, {
+              ...debugSelection,
+              cooldownRemainingSeconds: 0,
+              recoveryActive: false,
+            });
+          }
           behavior.lastPlanReason = debugSelection?.reason || "planned";
           replansSucceeded += 1;
           changed = true;
@@ -1292,9 +1328,6 @@ export function createHumanManager({
       changed = true;
     }
     if (applySurvivorSoftSeparation()) {
-      changed = true;
-    }
-    if (runGuestBehaviorStep(0, { recordCycle: false })) {
       changed = true;
     }
     return changed;
@@ -1434,6 +1467,17 @@ export function createHumanManager({
     };
   }
 
+  function setDebugEnabled(enabled) {
+    debugEnabled = Boolean(enabled);
+    if (!debugEnabled) {
+      guestWaypointSelectionDebugById.clear();
+    }
+  }
+
+  function isDebugEnabled() {
+    return debugEnabled;
+  }
+
   function destroy() {
     for (const record of humansById.values()) {
       record.controller.destroy();
@@ -1453,6 +1497,8 @@ export function createHumanManager({
     getPrimaryHumanController,
     getPrimaryLivingHumanController,
     getLivingHumanCount,
+    setDebugEnabled,
+    isDebugEnabled,
     getDebugState,
     update,
     syncToView,
