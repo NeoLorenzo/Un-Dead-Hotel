@@ -58,6 +58,31 @@ function normalizeWorldPoint(point) {
   };
 }
 
+function normalizeTilePoint(point) {
+  return {
+    x: Math.floor(Number(point?.x) || 0),
+    y: Math.floor(Number(point?.y) || 0),
+  };
+}
+
+function dedupeWorldPoints(points) {
+  const out = [];
+  let previous = null;
+  for (const point of points) {
+    const normalized = normalizeWorldPoint(point);
+    if (
+      previous &&
+      Math.abs(previous.x - normalized.x) <= 0.000001 &&
+      Math.abs(previous.y - normalized.y) <= 0.000001
+    ) {
+      continue;
+    }
+    out.push(normalized);
+    previous = normalized;
+  }
+  return out;
+}
+
 export function createZombieController({
   id,
   scene,
@@ -109,7 +134,8 @@ export function createZombieController({
   const arrivalRadius = Math.max(0.01, Number(arrivalRadiusTiles) || DEFAULT_ARRIVAL_RADIUS_TILES);
 
   let headingRadians = 0;
-  let waypointWorld = null;
+  let pathWaypointsWorld = [];
+  let waypointIndex = 0;
   let lastTilePixels = 12;
 
   function clearVelocity() {
@@ -117,27 +143,64 @@ export function createZombieController({
     worldVelocity.y = 0;
   }
 
-  function setWaypointWorld(nextWaypoint) {
+  function sanitizeWorldPath(pathWorldPoints) {
+    if (!Array.isArray(pathWorldPoints)) {
+      return [];
+    }
+    const points = [];
+    for (const point of pathWorldPoints) {
+      const normalized = normalizeWorldPoint(point);
+      if (!isWalkableWorld(runtime, normalized.x, normalized.y)) {
+        continue;
+      }
+      points.push(normalized);
+    }
+    return dedupeWorldPoints(points);
+  }
+
+  function clearPath() {
+    pathWaypointsWorld = [];
+    waypointIndex = 0;
+    clearVelocity();
+  }
+
+  function setPath(nextPathTiles) {
     if (health.isDead()) {
-      waypointWorld = null;
+      clearPath();
       return false;
     }
-    if (!Number.isFinite(nextWaypoint?.x) || !Number.isFinite(nextWaypoint?.y)) {
-      waypointWorld = null;
+    const tileWaypoints = Array.isArray(nextPathTiles)
+      ? nextPathTiles.map((tile) => normalizeTilePoint(tile))
+      : [];
+    const worldWaypoints = [];
+    for (const tile of tileWaypoints) {
+      worldWaypoints.push(runtime.tileToWorldCenter(tile.x, tile.y));
+    }
+    return setWorldPath(worldWaypoints);
+  }
+
+  function setWorldPath(nextWorldPathPoints) {
+    if (health.isDead()) {
+      clearPath();
       return false;
     }
-    const normalized = normalizeWorldPoint(nextWaypoint);
-    if (!isWalkableWorld(runtime, normalized.x, normalized.y)) {
-      waypointWorld = null;
+    const sanitized = sanitizeWorldPath(nextWorldPathPoints);
+    if (sanitized.length === 0) {
+      clearPath();
       return false;
     }
-    waypointWorld = normalized;
+
+    pathWaypointsWorld = sanitized;
+    waypointIndex = 0;
     return true;
   }
 
   function clearWaypoint() {
-    waypointWorld = null;
-    clearVelocity();
+    clearPath();
+  }
+
+  function hasWaypoint() {
+    return waypointIndex < pathWaypointsWorld.length;
   }
 
   function moveWithCollisionGate(dx, dy) {
@@ -191,17 +254,23 @@ export function createZombieController({
       clearVelocity();
       return false;
     }
-    if (!waypointWorld) {
+    if (waypointIndex >= pathWaypointsWorld.length) {
       clearVelocity();
       return false;
     }
 
+    const waypointWorld = pathWaypointsWorld[waypointIndex];
     const toTargetX = waypointWorld.x - worldPosition.x;
     const toTargetY = waypointWorld.y - worldPosition.y;
     const distance = Math.hypot(toTargetX, toTargetY);
 
     if (distance <= arrivalRadius) {
-      clearWaypoint();
+      waypointIndex += 1;
+      if (waypointIndex >= pathWaypointsWorld.length) {
+        clearPath();
+      } else {
+        clearVelocity();
+      }
       return true;
     }
 
@@ -214,7 +283,7 @@ export function createZombieController({
     const movedDistance = Math.hypot(moveResult.dx, moveResult.dy);
 
     if (!moveResult.moved || movedDistance < MIN_MOVEMENT_DISTANCE_TILES) {
-      clearWaypoint();
+      clearPath();
       return true;
     }
 
@@ -225,7 +294,12 @@ export function createZombieController({
     const remainingY = waypointWorld.y - worldPosition.y;
     const remainingDistance = Math.hypot(remainingX, remainingY);
     if (remainingDistance <= arrivalRadius) {
-      clearWaypoint();
+      waypointIndex += 1;
+      if (waypointIndex >= pathWaypointsWorld.length) {
+        clearPath();
+      } else {
+        clearVelocity();
+      }
       return true;
     }
 
@@ -324,7 +398,16 @@ export function createZombieController({
       health: health.getState(),
       visionConeAngleDegrees: ZOMBIE_VISION_CONE_ANGLE_DEGREES,
       visionConeRangeTiles: ZOMBIE_VISION_CONE_RANGE_TILES,
-      waypointWorld: waypointWorld ? { ...waypointWorld } : null,
+      waypointWorld: hasWaypoint()
+        ? {
+            x: pathWaypointsWorld[waypointIndex].x,
+            y: pathWaypointsWorld[waypointIndex].y,
+          }
+        : null,
+      pathWorld: pathWaypointsWorld
+        .slice(waypointIndex)
+        .map((point) => ({ ...point })),
+      waypointIndex,
     };
   }
 
@@ -351,9 +434,11 @@ export function createZombieController({
 
   return {
     getId: () => id,
-    setWaypointWorld,
+    setPath,
+    setWorldPath,
+    clearPath,
     clearWaypoint,
-    hasWaypoint: () => Boolean(waypointWorld),
+    hasWaypoint,
     update,
     nudge,
     syncToView,

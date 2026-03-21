@@ -9,6 +9,12 @@ import {
   DEFAULT_ZOMBIE_ATTACK_DAMAGE,
 } from "../combat/zombieAttackResolver.js";
 import { createZombieWanderPlanner } from "./zombieWanderPlanner.js";
+import {
+  buildOccupiedSubTileKeysFromWorldPoints,
+  rasterizeSubTileLine,
+  subTileCellToWorldCenter,
+  subTileCoordKey,
+} from "../../../engine/world/lineTileRasterizer.js";
 
 const DEFAULT_SPAWN_SEARCH_RADIUS_TILES = 3;
 const DEFAULT_WAYPOINT_CANDIDATE_ATTEMPTS = 10;
@@ -31,6 +37,9 @@ const DEFAULT_FIRST_CONTACT_MAX_SPAWNS_PER_UPDATE = 16;
 const DEFAULT_FIRST_CONTACT_MAX_RECYCLES_PER_UPDATE = 16;
 const DEFAULT_FIRST_CONTACT_PERIMETER_CHECK_INTERVAL_SECONDS = 0.25;
 const DEFAULT_PURSUIT_LINE_CHECK_STEP_TILES = 0.2;
+const LOCOMOTION_SUB_TILE_SIZE_TILES = 0.25;
+const PURSUIT_REPLAN_TARGET_DELTA_TILES = 0.04;
+const PURSUIT_REPLAN_MIN_INTERVAL_SECONDS = 0.08;
 
 function isFiniteNumber(value) {
   return Number.isFinite(value);
@@ -137,6 +146,50 @@ function findNearestWalkableTile(runtime, startTile, maxRadius) {
   }
 
   return null;
+}
+
+function distanceBetweenWorldPoints(a, b) {
+  if (!a || !b) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const ax = Number(a.x);
+  const ay = Number(a.y);
+  const bx = Number(b.x);
+  const by = Number(b.y);
+  if (
+    !Number.isFinite(ax) ||
+    !Number.isFinite(ay) ||
+    !Number.isFinite(bx) ||
+    !Number.isFinite(by)
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.hypot(bx - ax, by - ay);
+}
+
+function shouldReplanPursuitPath(zombie, pursuitState, targetWorld) {
+  if (!zombie.hasWaypoint()) {
+    return true;
+  }
+  if ((Number(pursuitState?.replanCooldownSeconds) || 0) > 0) {
+    return false;
+  }
+  if (!pursuitState?.lastPlannedWorld) {
+    return true;
+  }
+  return (
+    distanceBetweenWorldPoints(pursuitState.lastPlannedWorld, targetWorld) >=
+    PURSUIT_REPLAN_TARGET_DELTA_TILES
+  );
+}
+
+function isWalkableZombieSubTileCenter(runtime, subTileX, subTileY) {
+  const center = subTileCellToWorldCenter(
+    subTileX,
+    subTileY,
+    LOCOMOTION_SUB_TILE_SIZE_TILES
+  );
+  return isWalkableWorldPoint(runtime, center.x, center.y);
 }
 
 export function createZombieManager({
@@ -248,6 +301,81 @@ export function createZombieManager({
       Number(attackPolicy?.zombieTouchRadiusTiles) || ZOMBIE_COLLIDER_RADIUS_TILES,
   });
 
+  function buildZombieOccupancyKeySet() {
+    return buildOccupiedSubTileKeysFromWorldPoints(
+      zombies
+        .filter((zombie) => !(typeof zombie.isDead === "function" && zombie.isDead()))
+        .map((zombie) => zombie.getWorldPosition?.())
+        .filter((world) => isFiniteNumber(world?.x) && isFiniteNumber(world?.y)),
+      { cellSizeTiles: LOCOMOTION_SUB_TILE_SIZE_TILES }
+    );
+  }
+
+  function assignZombieRasterPath(zombie, targetWorld, options = {}) {
+    if (!zombie || !targetWorld) {
+      return {
+        accepted: false,
+        reason: "invalid_target",
+        pathResult: null,
+      };
+    }
+    const startWorld = zombie.getWorldPosition?.();
+    if (!isFiniteNumber(startWorld?.x) || !isFiniteNumber(startWorld?.y)) {
+      return {
+        accepted: false,
+        reason: "invalid_start",
+        pathResult: null,
+      };
+    }
+    const goalWorld = normalizeWorldPoint(targetWorld);
+    const occupiedSubTileKeys =
+      options.occupiedSubTileKeys instanceof Set ? options.occupiedSubTileKeys : null;
+    const allowOccupiedGoal = options.allowOccupiedGoal === true;
+    const allowBlockedGoal = options.allowBlockedGoal === true;
+    const pathResult = rasterizeSubTileLine({
+      startWorld,
+      goalWorld,
+      cellSizeTiles: LOCOMOTION_SUB_TILE_SIZE_TILES,
+      includeStart: false,
+      includeGoal: true,
+      isBlockedCell: (cell, context) => {
+        if (allowBlockedGoal && context.isGoal) {
+          return false;
+        }
+        if (!isWalkableZombieSubTileCenter(runtime, cell.x, cell.y)) {
+          return true;
+        }
+        if (!occupiedSubTileKeys) {
+          return false;
+        }
+        const key = subTileCoordKey(cell.x, cell.y);
+        if (!occupiedSubTileKeys.has(key)) {
+          return false;
+        }
+        if (context.isStart) {
+          return false;
+        }
+        if (allowOccupiedGoal && context.isGoal) {
+          return false;
+        }
+        return true;
+      },
+    });
+    if (!Array.isArray(pathResult.pathWorld) || pathResult.pathWorld.length === 0) {
+      return {
+        accepted: false,
+        reason: pathResult.status === "blocked" ? "path_blocked" : "empty_path",
+        pathResult,
+      };
+    }
+    const accepted = zombie.setWorldPath(pathResult.pathWorld);
+    return {
+      accepted,
+      reason: accepted ? "planned" : "rejected_by_controller",
+      pathResult,
+    };
+  }
+
   function createInitialWanderState(zombieId) {
     return {
       zombieId,
@@ -264,8 +392,10 @@ export function createZombieManager({
       mode: "wander",
       targetId: null,
       lastKnownWorld: null,
+      lastPlannedWorld: null,
       hasLineOfSight: false,
       distanceToTarget: null,
+      replanCooldownSeconds: 0,
     };
   }
 
@@ -527,14 +657,38 @@ export function createZombieManager({
     return best;
   }
 
-  function attemptSetZombieWaypoint(zombie, targetWorld) {
+  function attemptSetZombiePath(zombie, targetWorld, options = {}) {
     if (!targetWorld) {
-      return false;
+      return {
+        accepted: false,
+        reason: "invalid_target",
+        pathResult: null,
+      };
     }
-    return zombie.setWaypointWorld(targetWorld);
+    const firstAttempt = assignZombieRasterPath(zombie, targetWorld, options);
+    if (firstAttempt.accepted) {
+      return firstAttempt;
+    }
+    if (
+      firstAttempt.reason !== "path_blocked" &&
+      firstAttempt.reason !== "empty_path"
+    ) {
+      return firstAttempt;
+    }
+    const retryWithoutOccupancy = assignZombieRasterPath(zombie, targetWorld, {
+      allowOccupiedGoal: true,
+      allowBlockedGoal: options.allowBlockedGoal === true,
+    });
+    if (retryWithoutOccupancy.accepted) {
+      return {
+        ...retryWithoutOccupancy,
+        reason: "planned_after_occupancy_retry",
+      };
+    }
+    return firstAttempt;
   }
 
-  function runPursuitStep() {
+  function runPursuitStep({ occupiedSubTileKeys, dtSeconds = 0 } = {}) {
     if (!pursuitEnabled) {
       lastPursuitCycle = {
         enabled: false,
@@ -565,12 +719,18 @@ export function createZombieManager({
 
     for (const zombie of zombies) {
       const pursuitState = getPursuitState(zombie.getId());
+      pursuitState.replanCooldownSeconds = Math.max(
+        0,
+        (Number(pursuitState.replanCooldownSeconds) || 0) - Math.max(0, Number(dtSeconds) || 0)
+      );
       if (typeof zombie.isDead === "function" && zombie.isDead()) {
         pursuitState.mode = "wander";
         pursuitState.targetId = null;
         pursuitState.lastKnownWorld = null;
+        pursuitState.lastPlannedWorld = null;
         pursuitState.hasLineOfSight = false;
         pursuitState.distanceToTarget = null;
+        pursuitState.replanCooldownSeconds = 0;
         continue;
       }
       cycle.aliveZombieCount += 1;
@@ -585,9 +745,16 @@ export function createZombieManager({
           isTargetInsideVisionCone(zombie, zombieWorld, lockedTarget.world) &&
           hasClearLineOfSight(zombieWorld, lockedTarget.world)
         ) {
-          const accepted = attemptSetZombieWaypoint(zombie, lockedTarget.world);
-          if (accepted) {
-            changed = true;
+          if (shouldReplanPursuitPath(zombie, pursuitState, lockedTarget.world)) {
+            const assignment = attemptSetZombiePath(zombie, lockedTarget.world, {
+              occupiedSubTileKeys,
+              allowBlockedGoal: true,
+            });
+            if (assignment.accepted) {
+              changed = true;
+              pursuitState.replanCooldownSeconds = PURSUIT_REPLAN_MIN_INTERVAL_SECONDS;
+              pursuitState.lastPlannedWorld = { ...lockedTarget.world };
+            }
           }
           pursuitState.mode = "pursuit";
           pursuitState.hasLineOfSight = true;
@@ -613,9 +780,14 @@ export function createZombieManager({
           pursuitState.hasLineOfSight = true;
           pursuitState.lastKnownWorld = { ...nearestVisible.target.world };
           pursuitState.distanceToTarget = nearestVisible.distance;
-          const accepted = attemptSetZombieWaypoint(zombie, nearestVisible.target.world);
-          if (accepted) {
+          const assignment = attemptSetZombiePath(zombie, nearestVisible.target.world, {
+            occupiedSubTileKeys,
+            allowBlockedGoal: true,
+          });
+          if (assignment.accepted) {
             changed = true;
+            pursuitState.replanCooldownSeconds = PURSUIT_REPLAN_MIN_INTERVAL_SECONDS;
+            pursuitState.lastPlannedWorld = { ...nearestVisible.target.world };
           }
           if (previousTargetId === null) {
             cycle.acquiredLockCount += 1;
@@ -638,15 +810,20 @@ export function createZombieManager({
             pursuitState.distanceToTarget = null;
           }
         } else {
-          const accepted = attemptSetZombieWaypoint(zombie, pursuitState.lastKnownWorld);
-          if (accepted) {
+          const assignment = attemptSetZombiePath(zombie, pursuitState.lastKnownWorld, {
+            occupiedSubTileKeys,
+          });
+          if (assignment.accepted) {
             changed = true;
             pursuitState.mode = "investigate";
             pursuitState.hasLineOfSight = false;
             pursuitState.distanceToTarget = null;
+            pursuitState.replanCooldownSeconds = PURSUIT_REPLAN_MIN_INTERVAL_SECONDS;
+            pursuitState.lastPlannedWorld = { ...pursuitState.lastKnownWorld };
           } else {
             pursuitState.mode = "wander";
             pursuitState.lastKnownWorld = null;
+            pursuitState.lastPlannedWorld = null;
             pursuitState.distanceToTarget = null;
           }
         }
@@ -1230,7 +1407,8 @@ export function createZombieManager({
         changed = true;
       }
     }
-    if (runPursuitStep()) {
+    const occupiedSubTileKeys = buildZombieOccupancyKeySet();
+    if (runPursuitStep({ occupiedSubTileKeys, dtSeconds })) {
       changed = true;
     }
     for (const zombie of zombies) {
@@ -1248,8 +1426,10 @@ export function createZombieManager({
         const debugSelection = normalizedSelection.debug;
         const waypoint = normalizedSelection.waypoint;
         if (waypoint) {
-          const accepted = zombie.setWaypointWorld(waypoint);
-          if (accepted) {
+          const assignment = assignZombieRasterPath(zombie, waypoint, {
+            occupiedSubTileKeys,
+          });
+          if (assignment.accepted) {
             state.noCandidateStreak = 0;
             state.recoveryRemainingSeconds = 0;
             state.repickCooldownRemainingSeconds = 0;
@@ -1257,6 +1437,11 @@ export function createZombieManager({
             if (debugEnabled) {
               waypointSelectionDebugById.set(zombie.getId(), {
                 ...debugSelection,
+                wasTrimmed: assignment.pathResult?.wasTrimmed === true,
+                blockedCell: assignment.pathResult?.blockedCell
+                  ? { ...assignment.pathResult.blockedCell }
+                  : null,
+                pathNodeCount: assignment.pathResult?.pathWorld?.length || 0,
                 cooldownRemainingSeconds: 0,
                 recoveryActive: false,
               });
@@ -1265,7 +1450,14 @@ export function createZombieManager({
             registerWaypointFailure(
               zombie,
               state,
-              buildControllerRejectedDebug(selection)
+              {
+                ...buildControllerRejectedDebug(selection),
+                reason: assignment.reason || "rejected_by_controller",
+                wasTrimmed: assignment.pathResult?.wasTrimmed === true,
+                blockedCell: assignment.pathResult?.blockedCell
+                  ? { ...assignment.pathResult.blockedCell }
+                  : null,
+              }
             );
           }
         } else {
@@ -1350,7 +1542,11 @@ export function createZombieManager({
     if (!zombie) {
       return false;
     }
-    const accepted = zombie.setWaypointWorld(waypointWorld);
+    const occupiedSubTileKeys = buildZombieOccupancyKeySet();
+    const assignment = assignZombieRasterPath(zombie, waypointWorld, {
+      occupiedSubTileKeys,
+    });
+    const accepted = assignment.accepted;
     const state = getWanderState(zombieId);
     state.noCandidateStreak = 0;
     state.recoveryRemainingSeconds = 0;
@@ -1358,6 +1554,11 @@ export function createZombieManager({
     if (debugEnabled) {
       waypointSelectionDebugById.set(zombieId, {
         reason: accepted ? "manual_override" : "manual_override_rejected",
+        wasTrimmed: assignment.pathResult?.wasTrimmed === true,
+        blockedCell: assignment.pathResult?.blockedCell
+          ? { ...assignment.pathResult.blockedCell }
+          : null,
+        pathNodeCount: assignment.pathResult?.pathWorld?.length || 0,
         attempts: 0,
         candidates: [],
       });
@@ -1410,8 +1611,12 @@ export function createZombieManager({
           targetId: pursuitState.targetId,
           hasLineOfSight: pursuitState.hasLineOfSight,
           distanceToTarget: pursuitState.distanceToTarget,
+          replanCooldownSeconds: pursuitState.replanCooldownSeconds,
           lastKnownWorld: pursuitState.lastKnownWorld
             ? { ...pursuitState.lastKnownWorld }
+            : null,
+          lastPlannedWorld: pursuitState.lastPlannedWorld
+            ? { ...pursuitState.lastPlannedWorld }
             : null,
         },
         attack: {

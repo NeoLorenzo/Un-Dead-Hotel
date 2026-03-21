@@ -49,6 +49,10 @@ Current game runtime gameplay slice includes:
   - corner-cut prevention for diagonal movement,
   - boundary-aware directional retry expansion,
   - unique quarter-tile destination claiming per survivor,
+- locomotion standardization (Finding Our Way Phase 1):
+  - survivors, guests, and zombies all execute movement on the same `0.25` tile grid,
+  - zombie wander/pursuit and guest wander/flee now execute rasterized path arrays,
+  - vector waypoint steering execution is removed from active gameplay movement,
 - first-contact zombie population policy:
   - startup target of `100` zombies,
   - spawn band constrained to `10-100` tiles from the first human,
@@ -56,6 +60,7 @@ Current game runtime gameplay slice includes:
 - zombie perception/combat loop:
   - cone + line-of-sight target acquisition,
   - nearest-target pursuit with last-known investigate fallback,
+  - pursuit movement updates through short-cadence raster path replanning,
   - touch attacks for `20` HP per hit on `1.0s` cooldown,
   - zombie speed fixed at `50%` of human speed,
 - always-visible HP bars for human and zombies with zombie cooldown bars,

@@ -344,18 +344,6 @@ export function createHumanController({
     return true;
   }
 
-  function setWaypointWorld(nextWaypoint) {
-    if (health.isDead()) {
-      clearPath();
-      return false;
-    }
-    if (!Number.isFinite(nextWaypoint?.x) || !Number.isFinite(nextWaypoint?.y)) {
-      clearPath();
-      return false;
-    }
-    return setWorldPath([normalizeWorldPoint(nextWaypoint)]);
-  }
-
   function clearWaypoint() {
     clearPath();
   }
@@ -606,7 +594,9 @@ export function createHumanController({
             y: pathWaypointsWorld[waypointIndex].y,
           }
         : null,
-      pathWorld: pathWaypointsWorld.map((point) => ({ ...point })),
+      pathWorld: pathWaypointsWorld
+        .slice(waypointIndex)
+        .map((point) => ({ ...point })),
       waypointIndex,
       selected,
     };
@@ -727,7 +717,6 @@ export function createHumanController({
     isSelected,
     setPath,
     setWorldPath,
-    setWaypointWorld,
     clearPath,
     clearWaypoint,
     update,

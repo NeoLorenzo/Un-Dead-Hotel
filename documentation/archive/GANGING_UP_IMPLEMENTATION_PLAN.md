@@ -23,6 +23,7 @@ Define the implementation plan for the **Ganging Up** gameplay slice:
 - Phase 8 implemented on **March 20, 2026**.
 - Phase 9 implemented on **March 20, 2026**.
 - Marked complete and archived on **March 20, 2026**.
+- Historical follow-up: deferred zombie pursuit locomotion rework was completed in `documentation/FINDING_OUR_WAY_PHASE_1_LOCOMOTION.md` on **March 21, 2026**.
 
 ## Scope (Locked For This Slice)
 

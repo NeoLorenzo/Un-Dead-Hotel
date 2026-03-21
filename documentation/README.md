@@ -16,6 +16,8 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
   - Practical API contracts for generation/world/app modules.
 - `ENGINE_RUNTIME_CONTRACTS.md`
   - Frozen runtime-facing contract boundary for Phaser-first migration Phase 1.
+- `FINDING_OUR_WAY_PHASE_1_LOCOMOTION.md`
+  - Completed implementation/spec tracker for Finding Our Way Phase 1 (locomotion standardization).
 - `PHASER_ADAPTER_API.md`
   - Phase 3 adapter contract between Phaser scene runtime and engine systems.
 

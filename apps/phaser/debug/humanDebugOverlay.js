@@ -596,29 +596,19 @@ function drawVisionCone(
     height
   ) {
     const start = guestDebug?.worldPosition;
-    const waypoint = guestDebug?.waypointWorld;
-    if (!start || !waypoint) {
+    const pathWorld = Array.isArray(guestDebug?.pathWorld) ? guestDebug.pathWorld : [];
+    if (!start || pathWorld.length === 0) {
       return;
     }
     if (
       !Number.isFinite(start.x) ||
-      !Number.isFinite(start.y) ||
-      !Number.isFinite(waypoint.x) ||
-      !Number.isFinite(waypoint.y)
+      !Number.isFinite(start.y)
     ) {
       return;
     }
     const startScreen = worldToScreen(
       start.x,
       start.y,
-      cameraTile,
-      tilePixels,
-      width,
-      height
-    );
-    const waypointScreen = worldToScreen(
-      waypoint.x,
-      waypoint.y,
       cameraTile,
       tilePixels,
       width,
@@ -631,8 +621,25 @@ function drawVisionCone(
     );
     overlay.beginPath();
     overlay.moveTo(startScreen.x, startScreen.y);
-    overlay.lineTo(waypointScreen.x, waypointScreen.y);
+    let waypointScreen = null;
+    for (const point of pathWorld) {
+      if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
+        continue;
+      }
+      waypointScreen = worldToScreen(
+        point.x,
+        point.y,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      overlay.lineTo(waypointScreen.x, waypointScreen.y);
+    }
     overlay.strokePath();
+    if (!waypointScreen) {
+      return;
+    }
     overlay.fillStyle(PATH_NODE_FILL_COLOR, PATH_NODE_FILL_ALPHA);
     overlay.fillCircle(
       Math.round(waypointScreen.x),

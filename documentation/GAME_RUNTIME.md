@@ -16,7 +16,7 @@ Debug runtime remains available:
 2. Create runtime adapter (`createPhaserRuntimeAdapter`).
 3. Create runtime debug controller (`createRuntimeDebugController`).
 4. Create gameplay controllers for active runtime mode.
-   - Current mode (`first_contact`, running the ganging-up slice) composes:
+   - Current mode (`first_contact`, running the ganging-up slice + Finding Our Way Phase 1 locomotion standardization) composes:
    - `humanManager` (primary survivor + natural guests)
    - `humanController` (primary survivor convenience handle)
    - `humanSelectionController` (roster-based survivor selection set)
@@ -89,7 +89,7 @@ When debug mode is enabled in game runtime:
 - applies blackout overlay,
 - highlights blocked collision geometry obstacles,
 - draws zombie vision cones and heading vectors,
-- draws zombie waypoint path segment diagnostics,
+- draws zombie queued path diagnostics,
 - draws zombie waypoint-selection candidate markers:
   - expanded-selected candidates,
   - fallback-selected candidates,
@@ -127,17 +127,21 @@ When debug mode is enabled in game runtime:
   - fallback to best single-step waypoint when continuation fails within attempt budget.
 - Manager tracks failed angular sectors with short TTL memory and excludes them during sampling.
 - Manager applies bounded recovery heading rotation after repeated no-candidate streaks.
-- Movement is direct world-space steering to waypoint (no A* for this slice).
+- Movement execution is path-array based on shared `0.25`-grid rasterization (no zombie A* in this slice).
 - When waypoint is reached/cleared or blocked, manager triggers immediate repick.
 - Nearby zombies apply soft separation nudges to avoid persistent overlap.
 - Pursuit state machine:
   - acquire nearest human when inside cone + line-of-sight,
-  - lock on and chase human-anchored waypoint,
-  - on LOS loss move to last-known waypoint then resume wander.
+  - lock on and chase human-anchored raster path targets,
+  - on LOS loss move to last-known rasterized target then resume wander.
 - Attack state:
   - touch-range attack for `20` damage per hit,
   - `1.0s` cooldown per zombie,
   - cooldown progress exposed for UI/debug.
+- Locomotion execution contract:
+  - zombie wander and pursuit both execute queued path arrays on the shared `0.25` grid,
+  - path arrays are built through shared line rasterization (no zombie A* in this slice),
+  - blocked traversal trims to walkable prefix and repicks after segment completion.
 
 ## Human Roster/Role Model (Phaser)
 
@@ -146,7 +150,7 @@ When debug mode is enabled in game runtime:
 - Natural spawns are `guest` (AI-controlled).
 - Guest population target is static and derived from zombie target count (`1:10` ratio).
 - Guest spawn/recycle rings anchor to all living survivors.
-- Guests use zombie-style cone/LOS perception and wander/flee behavior.
+- Guests use zombie-style cone/LOS perception and wander/flee behavior with rasterized `0.25`-grid path execution.
 - Survivor touching a guest converts that guest into a survivor.
 - Survivors are player-controlled only (no autonomous flee).
 - Nearby survivors apply soft separation nudges to avoid persistent overlap.

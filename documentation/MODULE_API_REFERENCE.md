@@ -79,6 +79,18 @@ Returned API:
 - `createSubTilePathfinder()`
   - returns `{ findPath }`
 
+### `engine/world/lineTileRasterizer.js`
+
+- `subTileCoordKey(cellX, cellY)` -> `string` key for sub-tile occupancy maps.
+- `worldToSubTileCell(worldX, worldY, cellSizeTiles?)` -> `{ x, y }`.
+- `subTileCellToWorldCenter(cellX, cellY, cellSizeTiles?)` -> `{ x, y }`.
+- `buildOccupiedSubTileKeysFromWorldPoints(worldPoints, { cellSizeTiles? }?)` -> `Set<string>`.
+- `rasterizeSubTileLine({ startWorld, goalWorld, cellSizeTiles?, includeStart?, includeGoal?, isBlockedCell? })`
+  - returns:
+    - `{ status: "ok", pathCells, pathWorld, blockedCell|null, wasTrimmed }`
+    - `{ status: "blocked" | "invalid", pathCells: [], pathWorld: [], blockedCell?, wasTrimmed }`
+  - used by zombie/guest locomotion execution to build `0.25`-grid path arrays with blocked-prefix trimming.
+
 ## App Composition Layer
 
 ### `apps/phaser/phaserRuntimeAdapter.js`
@@ -117,7 +129,6 @@ Returned API includes:
   - movement/path:
     - `setPath(pathTiles, options?)`
     - `setWorldPath(worldPathPoints)`
-    - `setWaypointWorld(waypointWorld)`
     - `clearWaypoint()`
     - `clearPath()`
     - `hasWaypoint()`
@@ -222,8 +233,10 @@ Returned API includes:
 ### `apps/phaser/zombie/zombieController.js`
 
 - `createZombieController({ id, scene, runtime, initialWorld, moveSpeedTilesPerSecond?, arrivalRadiusTiles?, maxHp?, currentHp? })`
-  - waypoint/motion:
-    - `setWaypointWorld(waypointWorld)`
+  - path/motion:
+    - `setPath(pathTiles)`
+    - `setWorldPath(worldPathPoints)`
+    - `clearPath()`
     - `clearWaypoint()`
     - `hasWaypoint()`
     - `update(dtSeconds)`
@@ -238,6 +251,7 @@ Returned API includes:
     - `rotateHeading(deltaRadians)`
     - `getVisionCone()` -> `{ angleDegrees, rangeTiles }`
     - `getColliderWorld()`
+    - `getDebugState()` (includes `waypointWorld`, remaining `pathWorld`, and `waypointIndex`)
     - `getMoveSpeedTilesPerSecond()`
     - `getHealthState()`
     - `getCurrentHp()`
@@ -247,7 +261,6 @@ Returned API includes:
     - `heal(amount)`
     - `setCurrentHp(nextCurrentHp)`
     - `setMaxHp(nextMaxHp, options?)`
-    - `getDebugState()`
   - lifecycle:
     - `destroy()`
 
@@ -272,9 +285,10 @@ Returned API includes:
   - `update(dtSeconds)`
   - `syncToView({ cameraTile, tilePixels, viewWidthPx, viewHeightPx })`
   - `getZombieCount()`
+  - `getPerceptionTargets()`
   - `setZombieWaypoint(zombieId, waypointWorld)`
   - `clearZombieWaypoint(zombieId)`
-  - `getDebugState()` (includes first-contact population diagnostics, pursuit/attack diagnostics, zombie health summary, per-zombie waypoint selection diagnostics, per-zombie `wanderRecovery` state, and `lastSpawnAttempt` result)
+  - `getDebugState()` (includes first-contact population diagnostics, pursuit/attack diagnostics, zombie health summary, per-zombie waypoint selection diagnostics including trim/blocked metadata, per-zombie `wanderRecovery` state, and `lastSpawnAttempt` result)
   - `destroy()`
 
 ### `apps/phaser/debug/zombieDebugOverlay.js`

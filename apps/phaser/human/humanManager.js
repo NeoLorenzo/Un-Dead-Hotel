@@ -1,6 +1,12 @@
 import { createHumanController } from "./humanController.js";
 import { createHumanPerception } from "./humanPerception.js";
 import { createZombieWanderPlanner } from "../zombie/zombieWanderPlanner.js";
+import {
+  buildOccupiedSubTileKeysFromWorldPoints,
+  rasterizeSubTileLine,
+  subTileCellToWorldCenter,
+  subTileCoordKey,
+} from "../../../engine/world/lineTileRasterizer.js";
 
 const PRIMARY_SURVIVOR_ID = "survivor_primary";
 const ROLE_SURVIVOR = "survivor";
@@ -22,6 +28,7 @@ const DEFAULT_GUEST_WANDER_FAILED_SECTOR_MEMORY_TTL_SECONDS = 1.5;
 const DEFAULT_GUEST_WANDER_FAILED_SECTOR_HALF_ANGLE_DEGREES = 18;
 const DEFAULT_GUEST_WANDER_NO_CANDIDATE_REPICK_COOLDOWN_SECONDS = 0.12;
 const DEFAULT_GUEST_WANDER_CONE_CLIP_RAY_COUNT = 20;
+const LOCOMOTION_SUB_TILE_SIZE_TILES = 0.25;
 const SOFT_SEPARATION_MIN_DISTANCE_TILES = HUMAN_COLLIDER_RADIUS_TILES * 2;
 const SOFT_SEPARATION_STRENGTH = 0.45;
 const SOFT_SEPARATION_EPSILON = 0.000001;
@@ -74,6 +81,31 @@ function isControllerAlive(controller) {
     return true;
   }
   return !controller.isDead();
+}
+
+function isWalkableGuestSubTileCenter(runtime, subTileX, subTileY) {
+  const center = subTileCellToWorldCenter(
+    subTileX,
+    subTileY,
+    LOCOMOTION_SUB_TILE_SIZE_TILES
+  );
+  if (typeof runtime.isWalkableWorldRect === "function") {
+    return runtime.isWalkableWorldRect(
+      center.x,
+      center.y,
+      HUMAN_COLLIDER_RADIUS_TILES,
+      HUMAN_COLLIDER_RADIUS_TILES
+    );
+  }
+  if (typeof runtime.isWalkableWorldPoint === "function") {
+    return runtime.isWalkableWorldPoint(
+      center.x,
+      center.y,
+      HUMAN_COLLIDER_RADIUS_TILES
+    );
+  }
+  const tile = runtime.worldToTile(center.x, center.y);
+  return runtime.isWalkableTile(tile.x, tile.y);
 }
 
 export function createHumanManager({
@@ -206,6 +238,84 @@ export function createHumanManager({
   let totalGuestConversions = 0;
   let lastGuestConversionCycle = null;
   let debugEnabled = false;
+
+  function buildGuestOccupancyKeySet(guests, zombieTargets) {
+    const guestWorldPoints = Array.isArray(guests)
+      ? guests
+          .map((entry) => entry?.controller?.getCurrentWorldPosition?.())
+          .filter((world) => isFiniteNumber(world?.x) && isFiniteNumber(world?.y))
+      : [];
+    const zombieWorldPoints = Array.isArray(zombieTargets)
+      ? zombieTargets
+          .map((target) => normalizeWorldPoint(target?.world))
+          .filter((world) => isFiniteNumber(world?.x) && isFiniteNumber(world?.y))
+      : [];
+    return buildOccupiedSubTileKeysFromWorldPoints(
+      [...guestWorldPoints, ...zombieWorldPoints],
+      { cellSizeTiles: LOCOMOTION_SUB_TILE_SIZE_TILES }
+    );
+  }
+
+  function assignGuestRasterPath(controller, targetWorld, options = {}) {
+    if (!controller || !targetWorld) {
+      return {
+        accepted: false,
+        reason: "invalid_target",
+        pathResult: null,
+      };
+    }
+    const startWorld = controller.getCurrentWorldPosition?.();
+    if (!isFiniteNumber(startWorld?.x) || !isFiniteNumber(startWorld?.y)) {
+      return {
+        accepted: false,
+        reason: "invalid_start",
+        pathResult: null,
+      };
+    }
+    const goalWorld = normalizeWorldPoint(targetWorld);
+    const occupiedSubTileKeys =
+      options.occupiedSubTileKeys instanceof Set ? options.occupiedSubTileKeys : null;
+    const allowOccupiedGoal = options.allowOccupiedGoal === true;
+    const pathResult = rasterizeSubTileLine({
+      startWorld,
+      goalWorld,
+      cellSizeTiles: LOCOMOTION_SUB_TILE_SIZE_TILES,
+      includeStart: false,
+      includeGoal: true,
+      isBlockedCell: (cell, context) => {
+        if (!isWalkableGuestSubTileCenter(runtime, cell.x, cell.y)) {
+          return true;
+        }
+        if (!occupiedSubTileKeys) {
+          return false;
+        }
+        const key = subTileCoordKey(cell.x, cell.y);
+        if (!occupiedSubTileKeys.has(key)) {
+          return false;
+        }
+        if (context.isStart) {
+          return false;
+        }
+        if (allowOccupiedGoal && context.isGoal) {
+          return false;
+        }
+        return true;
+      },
+    });
+    if (!Array.isArray(pathResult.pathWorld) || pathResult.pathWorld.length === 0) {
+      return {
+        accepted: false,
+        reason: pathResult.status === "blocked" ? "path_blocked" : "empty_path",
+        pathResult,
+      };
+    }
+    const accepted = controller.setWorldPath(pathResult.pathWorld);
+    return {
+      accepted,
+      reason: accepted ? "planned" : "rejected_by_controller",
+      pathResult,
+    };
+  }
 
   function createInitialGuestWanderState(humanId) {
     return {
@@ -1016,6 +1126,8 @@ export function createHumanManager({
     const guests = getHumanEntries({ livingOnly: true }).filter(
       (entry) => entry.role === ROLE_GUEST
     );
+    const zombieTargets = getGuestPerceptionTargets();
+    const occupiedSubTileKeys = buildGuestOccupancyKeySet(guests, zombieTargets);
     const activeGuestIds = new Set(guests.map((entry) => entry.id));
     let changed = false;
     let fleeGuestCount = 0;
@@ -1047,7 +1159,7 @@ export function createHumanManager({
         typeof controller?.getCurrentWorldPosition !== "function" ||
         typeof controller?.getHeadingRadians !== "function" ||
         typeof controller?.getVisionCone !== "function" ||
-        typeof controller?.setWaypointWorld !== "function" ||
+        typeof controller?.setWorldPath !== "function" ||
         typeof controller?.hasWaypoint !== "function"
       ) {
         continue;
@@ -1134,14 +1246,21 @@ export function createHumanManager({
         const debugSelection = normalizedFleeSelection.debug;
         const fleeWaypoint = normalizedFleeSelection.waypoint;
         if (fleeWaypoint) {
-          const accepted = controller.setWaypointWorld(fleeWaypoint);
-          if (accepted) {
+          const assignment = assignGuestRasterPath(controller, fleeWaypoint, {
+            occupiedSubTileKeys,
+          });
+          if (assignment.accepted) {
             wanderState.noCandidateStreak = 0;
             wanderState.recoveryRemainingSeconds = 0;
             wanderState.repickCooldownRemainingSeconds = 0;
             if (debugEnabled) {
               guestWaypointSelectionDebugById.set(guest.id, {
                 ...debugSelection,
+                wasTrimmed: assignment.pathResult?.wasTrimmed === true,
+                blockedCell: assignment.pathResult?.blockedCell
+                  ? { ...assignment.pathResult.blockedCell }
+                  : null,
+                pathNodeCount: assignment.pathResult?.pathWorld?.length || 0,
                 cooldownRemainingSeconds: 0,
                 recoveryActive: false,
               });
@@ -1155,10 +1274,17 @@ export function createHumanManager({
               guest.id,
               controller,
               wanderState,
-              buildControllerRejectedDebug(fleeSelection)
+              {
+                ...buildControllerRejectedDebug(fleeSelection),
+                reason: assignment.reason || "rejected_by_controller",
+                wasTrimmed: assignment.pathResult?.wasTrimmed === true,
+                blockedCell: assignment.pathResult?.blockedCell
+                  ? { ...assignment.pathResult.blockedCell }
+                  : null,
+              }
             );
             behavior.replanCooldownSeconds = Math.min(guestFleeReplanSeconds, 0.18);
-            behavior.lastPlanReason = "rejected_by_controller";
+            behavior.lastPlanReason = assignment.reason || "rejected_by_controller";
             failedPlanCount += 1;
           }
         } else {
@@ -1186,14 +1312,21 @@ export function createHumanManager({
       const debugSelection = normalizedSelection.debug;
       const waypoint = normalizedSelection.waypoint;
       if (waypoint) {
-        const accepted = controller.setWaypointWorld(waypoint);
-        if (accepted) {
+        const assignment = assignGuestRasterPath(controller, waypoint, {
+          occupiedSubTileKeys,
+        });
+        if (assignment.accepted) {
           wanderState.noCandidateStreak = 0;
           wanderState.recoveryRemainingSeconds = 0;
           wanderState.repickCooldownRemainingSeconds = 0;
           if (debugEnabled) {
             guestWaypointSelectionDebugById.set(guest.id, {
               ...debugSelection,
+              wasTrimmed: assignment.pathResult?.wasTrimmed === true,
+              blockedCell: assignment.pathResult?.blockedCell
+                ? { ...assignment.pathResult.blockedCell }
+                : null,
+              pathNodeCount: assignment.pathResult?.pathWorld?.length || 0,
               cooldownRemainingSeconds: 0,
               recoveryActive: false,
             });
@@ -1206,9 +1339,16 @@ export function createHumanManager({
             guest.id,
             controller,
             wanderState,
-            buildControllerRejectedDebug(selection)
+            {
+              ...buildControllerRejectedDebug(selection),
+              reason: assignment.reason || "rejected_by_controller",
+              wasTrimmed: assignment.pathResult?.wasTrimmed === true,
+              blockedCell: assignment.pathResult?.blockedCell
+                ? { ...assignment.pathResult.blockedCell }
+                : null,
+            }
           );
-          behavior.lastPlanReason = "rejected_by_controller";
+          behavior.lastPlanReason = assignment.reason || "rejected_by_controller";
           failedPlanCount += 1;
         }
       } else {

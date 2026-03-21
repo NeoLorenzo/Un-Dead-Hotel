@@ -5,7 +5,8 @@
 This document freezes the runtime-facing contracts for engine modules in the game runtime architecture (Phaser-based).
 
 Contract version: `v1`  
-Frozen on: `March 18, 2026`
+Frozen on: `March 18, 2026`  
+Updated contract revision: `v1.1` on `March 21, 2026` (locomotion raster utility contract added)
 
 ## Contract Rules
 
@@ -79,7 +80,39 @@ Any runtime implementation must:
 - Keep engine generation deterministic.
 - Treat HUD as display-only (no gameplay state ownership).
 
+## Sub-Tile Line Raster Contract (`v1.1`)
+
+Engine module:
+
+- `engine/world/lineTileRasterizer.js`
+
+Required exports consumed by runtime modules:
+
+- `subTileCoordKey(cellX, cellY) -> string`
+- `worldToSubTileCell(worldX, worldY, cellSizeTiles?) -> { x: number, y: number }`
+- `subTileCellToWorldCenter(cellX, cellY, cellSizeTiles?) -> { x: number, y: number }`
+- `buildOccupiedSubTileKeysFromWorldPoints(worldPoints, options?) -> Set<string>`
+- `rasterizeSubTileLine(options) -> RasterResult`
+
+`RasterResult` shape used by runtime modules:
+
+- `status: "ok" | "blocked" | "invalid"`
+- `startCell: { x, y } | null`
+- `goalCell: { x, y } | null`
+- `pathCells: Array<{ x, y }>`
+- `pathWorld: Array<{ x, y }>`
+- `blockedCell: { x, y } | null`
+- `wasTrimmed: boolean`
+
+Rules:
+
+- Module must remain framework-agnostic (`engine/` contract rule still applies).
+- Rasterization must support deterministic line stepping over sub-tile lattice.
+- Runtime modules may provide `isBlockedCell(...)` callback for occupancy/collision policy.
+- Runtime locomotion may execute trimmed prefix paths when `blockedCell` is present.
+
 ## Phase 1 Acceptance Status
 
 - Runtime-facing APIs documented for chunk access/loading, camera state, and HUD inputs.
 - Framework boundary constraints documented (`engine/` remains framework-agnostic).
+- Runtime-facing raster locomotion utility contract documented (`v1.1`).

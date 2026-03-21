@@ -75,10 +75,12 @@ The current architecture is organized around strict separation of concerns:
   - framework-agnostic tile-grid A* utility retained for legacy/debug usage.
 - `engine/world/subTilePathfinder.js`
   - framework-agnostic sub-tile bidirectional A* pathfinding utility (heap-based frontier) with 8-direction expansion and corner-safe diagonal rules.
+- `engine/world/lineTileRasterizer.js`
+  - framework-agnostic 0.25-grid line raster utility for wander/pursuit/flee path arrays, occupancy-aware blocking checks, and blocked-prefix trimming.
 - `apps/phaser/human/humanController.js`
   - per-human state, movement/collider integration, role metadata (`survivor`/`guest`), selection hooks, and HP/death state.
 - `apps/phaser/human/humanManager.js`
-  - human roster orchestration, natural guest spawn/recycle, guest perception/behavior loops, survivor-touch conversion, and survivor soft separation.
+  - human roster orchestration, natural guest spawn/recycle, guest perception/behavior loops, rasterized guest wander/flee locomotion dispatch, survivor-touch conversion, and survivor soft separation.
 - `apps/phaser/human/humanPerception.js`
   - reusable human cone + line-of-sight perception evaluation used by guest behavior.
 - `apps/phaser/human/humanSelectionController.js`
@@ -92,9 +94,9 @@ The current architecture is organized around strict separation of concerns:
 - `apps/phaser/combat/zombieAttackResolver.js`
   - framework-agnostic zombie touch-attack resolver and cooldown timing.
 - `apps/phaser/zombie/zombieManager.js`
-  - zombie spawn/update orchestration, first-contact ring population maintenance, pursuit/attack state orchestration, separation pass, failed-sector memory/recovery steering, and debug-state aggregation.
+  - zombie spawn/update orchestration, first-contact ring population maintenance, rasterized wander/pursuit path dispatch, pursuit/attack state orchestration, separation pass, failed-sector memory/recovery steering, and debug-state aggregation.
 - `apps/phaser/zombie/zombieController.js`
-  - per-zombie motion, HP state, and collision-aware direct steering to waypoint.
+  - per-zombie motion, HP state, and collision-aware path-array traversal (`setPath`/`setWorldPath`) on shared `0.25` grid nodes.
 - `apps/phaser/zombie/zombieWanderPlanner.js`
   - wall-clipped in-cone waypoint sampling with blocked-sector filtering and short-horizon continuation expansion (`A -> B`) fallback policy.
 - `apps/phaser/debug/zombieDebugOverlay.js`
@@ -122,12 +124,12 @@ Dependency direction for this slice:
 3. Camera chunk coordinate is computed from camera tile position.
 4. `worldStore.ensureWindow(...)` guarantees a loaded generation window around camera chunk.
 5. Renderer requests visible chunks via `ensureChunk(...)` callback.
-6. Current runtime mode (`first_contact`, ganging-up slice) composes humans + zombies together:
+6. Current runtime mode (`first_contact`, ganging-up slice + Finding Our Way Phase 1 locomotion standardization) composes humans + zombies together:
    - human roster manager (survivor + guests),
    - survivor multi-select and group command loop,
-   - guest spawn/perception/wander/flee/conversion behavior loops,
+   - guest spawn/perception/wander/flee/conversion behavior loops with `0.25`-grid rasterized locomotion execution,
    - startup zombie ring spawn and perimeter recycle policy,
-   - pursuit and touch-attack loop with cooldown,
+   - pursuit and touch-attack loop with cooldown, with zombie pursuit movement executed through `0.25`-grid rasterized path arrays,
    - always-visible HP bars and extinction-based game-over overlay.
 7. `runtimeHud.render(...)` presents runtime state metrics.
 
