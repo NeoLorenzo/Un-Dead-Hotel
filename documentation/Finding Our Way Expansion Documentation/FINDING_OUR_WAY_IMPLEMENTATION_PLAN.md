@@ -15,6 +15,17 @@ Define the implementation plan for the **Finding Our Way** gameplay/AI overhaul:
 - Expansion Phase 1 locomotion standardization completed on **March 21, 2026**.
 - This document now tracks remaining implementation work for Expansion Phase 2+.
 
+## Master Addendum (March 28, 2026)
+
+- Phase-level docs now exist and should be treated as active implementation detail sources:
+  - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_1_LOCOMOTION.md`
+  - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_2_MENTAL_MODEL.md`
+- Debug-mode-first rule is locked:
+  - Debug mode is a primary development surface.
+  - Every mechanic must be observable in debug mode when implemented.
+- Guest memory architecture rule is locked:
+  - danger memory and related runtime memory remain per-guest only.
+
 ## Expansion Sequencing Update (Locked)
 
 - **Expansion Phase 1 is complete** and documented in `documentation/FINDING_OUR_WAY_PHASE_1_LOCOMOTION.md`.
@@ -389,6 +400,7 @@ The following two constraints are copied verbatim and are implementation-critica
 - [ ] Influence map resolution locked (example: `1.0` or `2.0` world-tile cells).
 - [ ] Influence radius and gradient function locked.
 - [ ] Danger memory expiry/decay rule locked.
+- [x] Danger memory ownership locked as per-guest only (no shared guest memory).
 - [ ] Utility baseline weights and danger growth/decay curves locked.
 - [ ] Safe-zone definition locked (room center, room interior sample, or tagged nodes).
 - [ ] Shelter completion behavior locked (idle in room, patrol inside room, or timed reevaluate).
@@ -400,7 +412,7 @@ The following two constraints are copied verbatim and are implementation-critica
 3. What exact danger influence radius should use the `+50` center -> `+2` edge gradient?
 4. What exact danger growth function should be used when zombie is visible (distance-only, LOS-duration-only, or combined)?
 5. What exact danger decay and memory expiry timing should apply after LOS is lost?
-6. Should danger points be per-guest memory only, or merged into a shared guest influence map for the whole simulation?
+6. Resolved on March 28, 2026: danger points are per-guest memory only (no shared guest memory model).
 7. What precise safe-zone anchor should `seek_shelter` target (room center, nearest room-floor tile, doorway-adjacent tile, or another rule)?
 8. When a guest reaches shelter, should they idle in place, wander within shelter bounds, or immediately seek a deeper interior point?
 9. Should survivor pathfinding remain unweighted, or optionally use influence-map weights in a future phase?
