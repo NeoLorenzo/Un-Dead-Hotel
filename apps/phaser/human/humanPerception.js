@@ -1,5 +1,6 @@
 const DEFAULT_LINE_CHECK_STEP_TILES = 0.2;
 const DEFAULT_LINE_CHECK_RADIUS_TILES = 0.29;
+const DEFAULT_VISIBLE_TILE_BASE_RAY_COUNT = 36;
 
 function isFiniteNumber(value) {
   return Number.isFinite(value);
@@ -33,6 +34,10 @@ function isWalkableWorldPoint(runtime, worldX, worldY, lineCheckRadiusTiles) {
   }
   const tile = runtime.worldToTile(worldX, worldY);
   return runtime.isWalkableTile(tile.x, tile.y);
+}
+
+function tileKey(tileX, tileY) {
+  return `${tileX},${tileY}`;
 }
 
 function hasClearLineOfSight(
@@ -93,6 +98,77 @@ function isTargetInsideVisionCone({
   return delta <= coneHalfAngleRadians;
 }
 
+function collectVisibleTiles({
+  runtime,
+  observerWorld,
+  observerHeadingRadians,
+  visionCone,
+  lineCheckStepTiles,
+  lineCheckRadiusTiles,
+}) {
+  const origin = normalizeWorldPoint(observerWorld);
+  const heading = normalizeAngleRadians(observerHeadingRadians);
+  const coneRangeTiles = Math.max(0, Number(visionCone?.rangeTiles) || 0);
+  const coneAngleDegrees = Math.max(0, Number(visionCone?.angleDegrees) || 0);
+  const coneHalfAngleRadians = ((coneAngleDegrees * Math.PI) / 180) * 0.5;
+  const safeStep = Math.max(0.05, Number(lineCheckStepTiles) || DEFAULT_LINE_CHECK_STEP_TILES);
+  const tileByKey = new Map();
+
+  const originTile = runtime.worldToTile(origin.x, origin.y);
+  if (Number.isFinite(originTile?.x) && Number.isFinite(originTile?.y)) {
+    const normalizedTileX = Math.floor(originTile.x);
+    const normalizedTileY = Math.floor(originTile.y);
+    tileByKey.set(tileKey(normalizedTileX, normalizedTileY), {
+      x: normalizedTileX,
+      y: normalizedTileY,
+    });
+  }
+  if (coneRangeTiles <= 0) {
+    return [...tileByKey.values()];
+  }
+
+  const dynamicRayCount = Math.max(
+    DEFAULT_VISIBLE_TILE_BASE_RAY_COUNT,
+    Math.ceil(coneAngleDegrees * 0.8),
+    Math.ceil((coneRangeTiles / safeStep) * 0.2)
+  );
+  const rayCount = Math.max(1, dynamicRayCount);
+  const startAngle = heading - coneHalfAngleRadians;
+  const totalAngle = coneHalfAngleRadians * 2;
+
+  for (let rayIndex = 0; rayIndex < rayCount; rayIndex += 1) {
+    const t = rayCount === 1 ? 0.5 : rayIndex / (rayCount - 1);
+    const rayAngle = normalizeAngleRadians(startAngle + totalAngle * t);
+    const dx = Math.cos(rayAngle);
+    const dy = Math.sin(rayAngle);
+    for (
+      let distance = safeStep;
+      distance <= coneRangeTiles + 0.000001;
+      distance += safeStep
+    ) {
+      const clampedDistance = Math.min(distance, coneRangeTiles);
+      const sampleX = origin.x + dx * clampedDistance;
+      const sampleY = origin.y + dy * clampedDistance;
+      const sampleTile = runtime.worldToTile(sampleX, sampleY);
+      if (Number.isFinite(sampleTile?.x) && Number.isFinite(sampleTile?.y)) {
+        const normalizedTileX = Math.floor(sampleTile.x);
+        const normalizedTileY = Math.floor(sampleTile.y);
+        tileByKey.set(tileKey(normalizedTileX, normalizedTileY), {
+          x: normalizedTileX,
+          y: normalizedTileY,
+        });
+      }
+      if (
+        !isWalkableWorldPoint(runtime, sampleX, sampleY, lineCheckRadiusTiles)
+      ) {
+        break;
+      }
+    }
+  }
+
+  return [...tileByKey.values()];
+}
+
 export function createHumanPerception({
   runtime,
   lineCheckStepTiles = DEFAULT_LINE_CHECK_STEP_TILES,
@@ -120,6 +196,14 @@ export function createHumanPerception({
     const origin = normalizeWorldPoint(observerWorld);
     const heading = normalizeAngleRadians(observerHeadingRadians);
     const list = Array.isArray(targets) ? targets : [];
+    const visibleTiles = collectVisibleTiles({
+      runtime,
+      observerWorld: origin,
+      observerHeadingRadians: heading,
+      visionCone,
+      lineCheckStepTiles: resolvedLineCheckStepTiles,
+      lineCheckRadiusTiles: resolvedLineCheckRadiusTiles,
+    });
     let inConeCount = 0;
     let lineOfSightClearCount = 0;
     let best = null;
@@ -183,10 +267,12 @@ export function createHumanPerception({
     return {
       detected: best !== null,
       nearestVisibleTarget: best,
+      visibleTiles,
       stats: {
         candidateCount: list.length,
         inConeCount,
         lineOfSightClearCount,
+        visibleTileCount: visibleTiles.length,
       },
     };
   }

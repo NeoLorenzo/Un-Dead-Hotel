@@ -143,19 +143,40 @@ export function createFirstContactDiagnosticsPanel({
             guestBehaviorCycle.replansAttempted
           )}`
         );
+        lines.push(
+          `Guest intent: shelter ${toInt(
+            guestBehaviorCycle.shelterIntentGuestCount
+          )} | danger ${toInt(guestBehaviorCycle.dangerIntentGuestCount)} | wander ${toInt(
+            guestBehaviorCycle.wanderIntentGuestCount
+          )}`
+        );
       }
       if (Array.isArray(humanManagerDebug.guestBehavior?.byGuest)) {
         let fleeingNow = 0;
         let wanderingNow = 0;
+        let shelterIntentNow = 0;
+        let dangerIntentNow = 0;
         let replanningCooldownNow = 0;
+        let validPathNow = 0;
+        let retryingNow = 0;
         for (const guestState of humanManagerDebug.guestBehavior.byGuest) {
           if (guestState?.mode === "flee") {
             fleeingNow += 1;
           } else {
             wanderingNow += 1;
           }
+          if (guestState?.objectiveState === "shelter") {
+            shelterIntentNow += 1;
+          } else if (guestState?.objectiveState === "danger") {
+            dangerIntentNow += 1;
+          }
           if (Number(guestState?.replanCooldownSeconds) > 0) {
             replanningCooldownNow += 1;
+          }
+          if (guestState?.objectivePathStatus === "valid") {
+            validPathNow += 1;
+          } else if (guestState?.objectivePathStatus === "retrying") {
+            retryingNow += 1;
           }
         }
         lines.push(
@@ -163,6 +184,126 @@ export function createFirstContactDiagnosticsPanel({
             wanderingNow
           )} | replan cooldown ${toInt(replanningCooldownNow)}`
         );
+        lines.push(
+          `Guest live intent: shelter ${toInt(
+            shelterIntentNow
+          )} | danger ${toInt(dangerIntentNow)} | path valid ${toInt(
+            validPathNow
+          )} | path retrying ${toInt(retryingNow)}`
+        );
+      }
+
+      const guestMentalModel = humanManagerDebug.guestMentalModel || null;
+      const guestMentalCycle = guestMentalModel?.lastCycle || null;
+      if (guestMentalModel?.enabled) {
+        if (guestMentalCycle?.enabled) {
+          lines.push(
+            `Guest mental: dominant changes ${toInt(
+              guestMentalCycle.dominantChangedCount
+            )} | evaluated ${toInt(guestMentalCycle.evaluatedGuestCount)}/${toInt(
+              guestMentalCycle.guestCount
+            )} @ ${formatNumber(guestMentalCycle.evaluationCadenceHz, 2)}Hz`
+          );
+          lines.push(
+            `Guest context: room ${toInt(
+              guestMentalCycle.inRoomGuestCount
+            )} | corridor ${toInt(
+              guestMentalCycle.inCorridorGuestCount
+            )} | doorway-as-room ${toInt(
+              guestMentalCycle.doorwayAsRoomGuestCount
+            )} | other ${toInt(guestMentalCycle.unknownAreaGuestCount)}`
+          );
+          lines.push(
+            `Guest arbitration: hold_locked ${toInt(
+              guestMentalCycle.holdLockedCount
+            )} | preempted ${toInt(
+              guestMentalCycle.preemptedCount
+            )} | fallback ${toInt(guestMentalCycle.fallbackAppliedCount)} | retrying ${toInt(
+              guestMentalCycle.fallbackRetryingCount
+            )}`
+          );
+        }
+        const dominantCounts = guestMentalCycle?.dominantStateCounts || null;
+        if (dominantCounts) {
+          lines.push(
+            `Guest dominant states: shelter ${toInt(
+              dominantCounts.shelter
+            )} | wander ${toInt(dominantCounts.wander)} | danger ${toInt(
+              dominantCounts.danger
+            )} | thirst ${toInt(dominantCounts.thirst)} | hunger ${toInt(
+              dominantCounts.hunger
+            )}`
+          );
+        }
+        const objectiveCounts = guestMentalCycle?.objectiveStateCounts || null;
+        if (objectiveCounts) {
+          lines.push(
+            `Guest objectives: shelter ${toInt(
+              objectiveCounts.shelter
+            )} | wander ${toInt(objectiveCounts.wander)} | danger ${toInt(
+              objectiveCounts.danger
+            )} | none ${toInt(objectiveCounts.none)}`
+          );
+        }
+
+        const sampleGuest = Array.isArray(guestMentalModel.byGuest)
+          ? guestMentalModel.byGuest.find((entry) => entry?.lastEvaluation) || null
+          : null;
+        const sampleScores = sampleGuest?.lastEvaluation?.scoresByState || null;
+        const sampleInput = sampleGuest?.inputDebug || null;
+        const sampleEval = sampleGuest?.lastEvaluation || null;
+        if (sampleGuest && sampleScores) {
+          lines.push(
+            `Guest brain sample (${sampleGuest.id}): shelter ${formatNumber(
+              sampleScores.shelter,
+              2
+            )} | wander ${formatNumber(sampleScores.wander, 2)} | danger ${formatNumber(
+              sampleScores.danger,
+              2
+            )}`
+          );
+        }
+        if (sampleGuest && sampleInput) {
+          lines.push(
+            `Guest input sample (${sampleGuest.id}): hp ${formatNumber(
+              sampleInput.hpNormalized,
+              2
+            )} | in_room ${sampleInput.inRoom ? 1 : 0} | in_corridor ${
+              sampleInput.inCorridor ? 1 : 0
+            } | doorway_room ${sampleInput.doorwayTreatedAsRoom ? 1 : 0}`
+          );
+        }
+        if (sampleGuest && sampleEval) {
+          lines.push(
+            `Guest arbitration sample (${sampleGuest.id}): objective ${
+              sampleEval.objectiveState || "none"
+            } | reason ${sampleEval.arbitrationReasonCode || "n/a"} | hold ${formatNumber(
+              sampleEval.objectiveHoldSeconds,
+              2
+            )}/${formatNumber(sampleEval.minimumHoldSeconds, 2)}`
+          );
+          lines.push(
+            `Guest preemption sample (${sampleGuest.id}): gate ${
+              sampleEval.preemptionGate?.allowed === true ? "open" : "closed"
+            } | danger ${formatNumber(
+              sampleEval.preemptionGate?.dangerScore,
+              2
+            )} | current ${formatNumber(
+              sampleEval.preemptionGate?.currentScore,
+              2
+            )} | margin ${formatNumber(sampleEval.preemptionGate?.marginValue, 2)}`
+          );
+          lines.push(
+            `Guest fallback sample (${sampleGuest.id}): active ${
+              sampleEval.fallback?.active === true
+            } | retry ${formatNumber(
+              sampleEval.fallback?.retryRemainingSeconds,
+              2
+            )}s | count ${toInt(sampleEval.fallback?.retryCount)} | failure ${
+              sampleEval.fallback?.lastFailureReason || "n/a"
+            }`
+          );
+        }
       }
 
       const guestConversionCycle = humanManagerDebug.guestConversion?.lastCycle || null;

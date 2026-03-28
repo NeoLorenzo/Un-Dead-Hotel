@@ -1,4 +1,4 @@
-# Finding Our Way - Phase 2 Weighted Guest Mental Model Implementation Plan
+# Finding Our Way - Phase 2 Weighted Guest Mental Model Implementation Plan (Complete)
 
 ## Purpose
 
@@ -18,6 +18,7 @@ The brain must support adding more states and inputs later without rewriting the
 
 - Draft created on **March 27, 2026**.
 - Phase 1 locomotion prerequisite completed on **March 21, 2026**.
+- Implementation completed on **March 28, 2026**.
 
 ## Locked Decisions
 
@@ -396,26 +397,37 @@ Each guest receives a scheduled brain evaluation:
 - Exit criteria:
   - Spatial context and objective-path state can be validated with high-clarity overlays in live simulation.
 
-### Phase 2I: Debug Timeline, Anomalies, and Aggregate Diagnostics
+### Phase 2I: Perception-Gated Tile Identification and Room Reveal
 
 - Goal:
-  - Add higher-level tools for drift/thrash detection and tuning.
+  - Make guest world-knowledge follow perception rules instead of omniscient tile classification.
 - Primary files:
+  - `apps/phaser/human/humanPerception.js`
+  - `apps/phaser/human/humanManager.js`
+  - `apps/phaser/human/guestMentalModelInputs.js`
+  - `apps/phaser/phaserRuntimeAdapter.js`
   - `apps/phaser/debug/humanDebugOverlay.js`
-  - `apps/phaser/debug/firstContactDiagnosticsPanel.js`
 - Work:
-  - Add mini timeline (`10-20s`) with per-state score sparklines.
-  - Add anomaly warnings for:
-    - all enabled-state scores near zero,
-    - high-frequency winner switches.
-  - Add aggregate diagnostics for population state distribution and switch frequency.
-  - Add simple anomaly counters and last-occurrence timestamps for quick triage.
+  - Add per-guest identified-tile memory and keep it strictly per-guest.
+  - Add LOS tile sampling/collection for guest vision and expose identified LOS tiles in debug payload.
+  - Implement room reveal rule:
+    - if any identified LOS tile is `room` tile, mark full room tile set as identified for that room,
+    - if any identified LOS tile is doorway treated as room, mark full connected room tile set as identified.
+  - Implement fallback visibility rule:
+    - for all non-room/non-doorway cases, only LOS-identified tiles are considered identified.
+  - Route mental-model area-context extraction through identified-tile memory so context reads are perception-gated.
+  - Add debug overlay layer to distinguish:
+    - LOS-only identified tiles,
+    - room-revealed identified tiles,
+    - currently unknown tiles around inspected guest.
 - Verification:
-  - Timeline retains rolling window correctly under long runtime sessions.
-  - Anomaly triggers fire for synthetic edge cases and stay quiet in nominal behavior.
-  - Aggregate diagnostics track population distribution and switch-rate trends accurately.
+  - Seeing one room tile reveals every tile in that room and only that room.
+  - Seeing a doorway tile reveals every tile in the connected room.
+  - In corridor/other space, identified tiles are limited to LOS samples only.
+  - Identified-tile memory resets correctly on guest death/despawn/conversion.
+  - Debug overlay matches the memory state and reveals source (`LOS` vs `room reveal`).
 - Exit criteria:
-  - Debug tooling supports both per-guest diagnosis and population-level tuning.
+  - Tile identification behavior matches locked perception rules and is inspectable live.
 
 ## Implementation Sequence (Locked)
 
@@ -426,7 +438,7 @@ Each guest receives a scheduled brain evaluation:
 5. Complete `2E` and its paired debug visibility before advanced debug additions.
 6. Complete `2F` before decision-cause diagnostics.
 7. Complete `2G` before spatial/objective overlay upgrades.
-8. Complete `2H` before timeline/anomaly/aggregate diagnostics.
+8. Complete `2H` before perception-gated tile-identification rollout.
 9. Complete `2I` before final phase signoff.
 10. Debug parity gate: no subphase advances unless newly added behavior is observable in debug mode.
 
@@ -447,11 +459,12 @@ Each guest receives a scheduled brain evaluation:
 13. Panel includes a "Why this won" summary with top 3 dominant-state contribution terms.
 14. Panel includes hold/preemption timer badges and current preemption gate status.
 15. Panel includes fallback diagnostics (failure reason, retry timer, retry count).
-16. Panel includes a `10-20s` per-state score timeline.
-17. Debug world overlays show room/corridor classification and doorway-as-room interpretation for inspected guest context.
-18. Debug objective overlay shows target and path status (`valid`, `fallback`, `retrying`).
-19. Debug panel emits anomaly warnings for invalid/unstable score/state conditions.
-20. Subphase debug parity holds: each newly introduced behavior in Phase 2 is inspectable in debug mode in that same subphase.
+16. If a guest identifies at least one room tile in LOS, every tile in that room becomes identified for that guest.
+17. If a guest identifies a doorway tile treated as room, every tile in the connected room becomes identified for that guest.
+18. In all other cases, guest identified tiles are limited to LOS tiles only.
+19. Debug world overlays show room/corridor classification and doorway-as-room interpretation for inspected guest context.
+20. Debug objective overlay shows target and path status (`valid`, `fallback`, `retrying`).
+21. Subphase debug parity holds: each newly introduced behavior in Phase 2 is inspectable in debug mode in that same subphase.
 
 ## Verification Plan
 
@@ -474,13 +487,13 @@ Each guest receives a scheduled brain evaluation:
    - Confirm "Why this won" shows top 3 contribution terms for the dominant state each evaluation.
    - Confirm hold timer and danger-preemption gate badges update correctly under threshold and above-threshold scenarios.
    - Confirm fallback diagnostics update on objective path failure with reason, retry timer, and retry count.
-   - Confirm score timeline renders `10-20s` history for each state and reflects score trend changes.
    - Confirm world-space overlays mark room/corridor classification around the inspected guest.
    - Confirm doorway-prefab tiles render as room in classification overlays.
    - Confirm objective intent overlay shows current target and path status (`valid`, `fallback`, `retrying`).
-   - Confirm anomaly warnings appear for:
-     - near-zero enabled-state score conditions,
-     - high-frequency winner-switch conditions.
+   - Confirm room reveal behavior:
+     - one visible room tile reveals full room tile set for that guest,
+     - one visible doorway-as-room tile reveals full connected room tile set for that guest.
+   - Confirm non-room/non-doorway visibility remains LOS-only for identified tiles.
 4. Performance checks
    - Confirm per-guest brain evaluation cost is stable at `4Hz` mixed-population scale.
    - Confirm debug panel refresh at `10Hz` does not cause unacceptable frame spikes when enabled.

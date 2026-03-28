@@ -1,7 +1,11 @@
 import { CHUNK_SIZE } from "../../engine/procgen.js";
 import { createCameraController } from "../../engine/world/cameraController.js";
 import { createWorldStore } from "../../engine/world/worldStore.js";
-import { isTileWalkableForHumans } from "../../engine/generation/chunkGenerator.js";
+import {
+  isTileWalkableForHumans,
+  TILE_ROOM_DOOR,
+  TILE_ROOM_FLOOR,
+} from "../../engine/generation/chunkGenerator.js";
 
 const CHUNK_PREVIEW_FILL_COLORS = [
   0x25282d,
@@ -15,6 +19,7 @@ const CHUNK_PREVIEW_BORDER_COLOR = 0xb8b8b8;
 const DEFAULT_SUB_TILE_CELL_SIZE_TILES = 0.25;
 const DEFAULT_COLLISION_STEP_TILES = 0.12;
 const COLLISION_EPSILON = 0.000001;
+const TILE_CORRIDOR = 1;
 
 function isFiniteNumber(value) {
   return Number.isFinite(value);
@@ -139,6 +144,10 @@ export function createPhaserRuntimeAdapter({
   }
 
   function getTileAtWorld(tileX, tileY) {
+    return getTileContextAtTile(tileX, tileY).tile;
+  }
+
+  function getTileContextAtTile(tileX, tileY) {
     const worldTile = worldToTile(tileX, tileY);
     const chunkX = Math.floor(worldTile.x / CHUNK_SIZE);
     const chunkY = Math.floor(worldTile.y / CHUNK_SIZE);
@@ -146,10 +155,143 @@ export function createPhaserRuntimeAdapter({
     const localY = worldTile.y - chunkY * CHUNK_SIZE;
     const chunk = worldStore.ensureChunk(chunkX, chunkY);
     const tileMap = chunk?.tileMap;
-    if (!(tileMap instanceof Uint8Array)) {
-      return 0;
+    const tile =
+      tileMap instanceof Uint8Array ? tileMap[localY * CHUNK_SIZE + localX] ?? 0 : 0;
+    const rooms = Array.isArray(chunk?.rooms) ? chunk.rooms : [];
+    return {
+      tile,
+      tileX: worldTile.x,
+      tileY: worldTile.y,
+      chunkX,
+      chunkY,
+      localX,
+      localY,
+      rooms,
+    };
+  }
+
+  function getRoomIndexFromTileContext(context) {
+    if (!context || !Array.isArray(context.rooms)) {
+      return null;
     }
-    return tileMap[localY * CHUNK_SIZE + localX] ?? 0;
+    for (let i = 0; i < context.rooms.length; i += 1) {
+      const room = context.rooms[i];
+      if (
+        context.localX >= room.x &&
+        context.localX < room.x + room.w &&
+        context.localY >= room.y &&
+        context.localY < room.y + room.h
+      ) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  function classifyAreaAtWorld(worldX, worldY) {
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+      return {
+        tileX: 0,
+        tileY: 0,
+        tile: 0,
+        chunkX: 0,
+        chunkY: 0,
+        localX: 0,
+        localY: 0,
+        roomIndex: null,
+        isDoorwayTile: false,
+        doorwayTreatedAsRoom: false,
+        inRoom: false,
+        inCorridor: false,
+        classification: "other",
+      };
+    }
+
+    const context = getTileContextAtTile(worldX, worldY);
+    const roomIndex = getRoomIndexFromTileContext(context);
+
+    const insideRoomBounds = roomIndex !== null;
+    const isDoorwayTile = context.tile === TILE_ROOM_DOOR;
+    const doorwayTreatedAsRoom = isDoorwayTile && insideRoomBounds;
+    const inRoom =
+      context.tile === TILE_ROOM_FLOOR || doorwayTreatedAsRoom || insideRoomBounds;
+    const inCorridor = context.tile === TILE_CORRIDOR && !inRoom;
+
+    return {
+      tileX: context.tileX,
+      tileY: context.tileY,
+      tile: context.tile,
+      chunkX: context.chunkX,
+      chunkY: context.chunkY,
+      localX: context.localX,
+      localY: context.localY,
+      roomIndex,
+      isDoorwayTile,
+      doorwayTreatedAsRoom,
+      inRoom,
+      inCorridor,
+      classification: inRoom ? "room" : inCorridor ? "corridor" : "other",
+    };
+  }
+
+  function getRoomTilesByReference(chunkX, chunkY, roomIndex) {
+    if (
+      !Number.isFinite(chunkX) ||
+      !Number.isFinite(chunkY) ||
+      !Number.isFinite(roomIndex)
+    ) {
+      return null;
+    }
+
+    const normalizedChunkX = Math.floor(chunkX);
+    const normalizedChunkY = Math.floor(chunkY);
+    const normalizedRoomIndex = Math.floor(roomIndex);
+    const chunk = worldStore.ensureChunk(normalizedChunkX, normalizedChunkY);
+    const rooms = Array.isArray(chunk?.rooms) ? chunk.rooms : [];
+    const room = rooms[normalizedRoomIndex] || null;
+    if (!room) {
+      return null;
+    }
+
+    const tiles = [];
+    const worldOriginX = normalizedChunkX * CHUNK_SIZE;
+    const worldOriginY = normalizedChunkY * CHUNK_SIZE;
+    for (let localY = room.y; localY < room.y + room.h; localY += 1) {
+      for (let localX = room.x; localX < room.x + room.w; localX += 1) {
+        tiles.push({
+          x: worldOriginX + localX,
+          y: worldOriginY + localY,
+        });
+      }
+    }
+
+    return {
+      roomKey: `${normalizedChunkX},${normalizedChunkY},${normalizedRoomIndex}`,
+      chunkX: normalizedChunkX,
+      chunkY: normalizedChunkY,
+      roomIndex: normalizedRoomIndex,
+      tiles,
+    };
+  }
+
+  function getRoomTilesAtWorld(worldX, worldY) {
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+      return null;
+    }
+    const context = getTileContextAtTile(worldX, worldY);
+    const roomIndex = getRoomIndexFromTileContext(context);
+    if (!Number.isFinite(roomIndex)) {
+      return null;
+    }
+    return getRoomTilesByReference(context.chunkX, context.chunkY, roomIndex);
+  }
+
+  function isRoomWorldPoint(worldX, worldY) {
+    return classifyAreaAtWorld(worldX, worldY).inRoom;
+  }
+
+  function isCorridorWorldPoint(worldX, worldY) {
+    return classifyAreaAtWorld(worldX, worldY).inCorridor;
   }
 
   function isWalkableTile(tileX, tileY) {
@@ -660,6 +802,11 @@ export function createPhaserRuntimeAdapter({
     forEachVisibleCollisionObstacle,
     isWalkableWorldPoint,
     isWalkableWorldRect,
+    classifyAreaAtWorld,
+    getRoomTilesByReference,
+    getRoomTilesAtWorld,
+    isRoomWorldPoint,
+    isCorridorWorldPoint,
     resolveWorldRectMovement,
     buildSubTileNavigationGrid,
     ensureStreamWindow,

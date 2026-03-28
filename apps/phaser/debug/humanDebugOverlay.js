@@ -51,6 +51,71 @@ const GUEST_TARGET_MARKER_COLOR = 0xff8c42;
 const GUEST_TARGET_MARKER_ALPHA = 0.95;
 const GUEST_HEADING_COLOR = 0xbec9ff;
 const GUEST_HEADING_ALPHA = 0.85;
+const GUEST_AREA_ROOM_COLOR = 0x5cff87;
+const GUEST_AREA_CORRIDOR_COLOR = 0xffb347;
+const GUEST_AREA_OTHER_COLOR = 0xb5b8c4;
+const GUEST_AREA_DOORWAY_COLOR = 0x3fd3ff;
+const GUEST_AREA_MARKER_ALPHA = 0.92;
+const GUEST_ARBITRATION_HOLD_COLOR = 0x4ec5ff;
+const GUEST_ARBITRATION_PREEMPT_COLOR = 0xff6b9b;
+const GUEST_ARBITRATION_FALLBACK_COLOR = 0xffc857;
+const GUEST_ARBITRATION_LOCKED_COLOR = 0xffe26a;
+const BRAIN_PANEL_REFRESH_INTERVAL_MS = 100;
+const BRAIN_PANEL_WIDTH_PX = 430;
+const BRAIN_PANEL_MIN_HEIGHT_PX = 320;
+const BRAIN_PANEL_MARGIN_PX = 12;
+const BRAIN_PANEL_GRAPH_TOP_PX = 40;
+const BRAIN_PANEL_GRAPH_HEIGHT_PX = 164;
+const BRAIN_PANEL_TEXT_TOP_GAP_PX = 10;
+const BRAIN_PANEL_BACKGROUND_COLOR = 0x08131f;
+const BRAIN_PANEL_BACKGROUND_ALPHA = 0.94;
+const BRAIN_PANEL_BORDER_COLOR = 0x4fd1ff;
+const BRAIN_PANEL_BORDER_ALPHA = 0.7;
+const BRAIN_PANEL_TEXT_COLOR = "#d8ebff";
+const BRAIN_PANEL_DISABLED_TEXT_COLOR = "#7c8794";
+const BRAIN_PANEL_ACCENT_COLOR = 0x4fd1ff;
+const BRAIN_PANEL_POSITIVE_LINK_COLOR = 0x66d0ff;
+const BRAIN_PANEL_NEGATIVE_LINK_COLOR = 0xff9f78;
+const BRAIN_PANEL_DISABLED_LINK_COLOR = 0x4d5663;
+const BRAIN_PANEL_INPUT_NODE_COLOR = 0x7fc9ff;
+const BRAIN_PANEL_STATE_NODE_COLOR = 0x7dffb8;
+const BRAIN_PANEL_DOMINANT_NODE_COLOR = 0xffe26a;
+const BRAIN_PANEL_DISABLED_NODE_COLOR = 0x6f7783;
+const BRAIN_PANEL_BADGE_TEXT_COLOR = "#f5f9ff";
+const BRAIN_PANEL_BADGE_SUBTLE_BG = "#33414f";
+const BRAIN_PANEL_BADGE_HOLD_BG = "#1d5478";
+const BRAIN_PANEL_BADGE_HOLD_READY_BG = "#1f6a3b";
+const BRAIN_PANEL_BADGE_HOLD_LOCKED_BG = "#7a4c00";
+const BRAIN_PANEL_BADGE_PREEMPT_OPEN_BG = "#7a1d45";
+const BRAIN_PANEL_BADGE_RETRY_ACTIVE_BG = "#7a5a13";
+const SPATIAL_CLASSIFIER_SAMPLE_RADIUS_TILES = 4;
+const TILE_KNOWLEDGE_LOS_ONLY_COLOR = 0x38c8ff;
+const TILE_KNOWLEDGE_ROOM_REVEAL_COLOR = 0x63d471;
+const TILE_KNOWLEDGE_MIXED_COLOR = 0x7ddbd1;
+const OBJECTIVE_PATH_VALID_COLOR = 0x6cff9e;
+const OBJECTIVE_PATH_FALLBACK_COLOR = 0xffc857;
+const OBJECTIVE_PATH_RETRYING_COLOR = 0xff6b9b;
+const OBJECTIVE_PATH_IDLE_COLOR = 0x8f9aa8;
+const OBJECTIVE_PATH_STATUS_TEXT_COLOR = "#f3f8ff";
+const OBJECTIVE_PATH_STATUS_VALID_BG = "#1f6a3b";
+const OBJECTIVE_PATH_STATUS_FALLBACK_BG = "#7a5a13";
+const OBJECTIVE_PATH_STATUS_RETRYING_BG = "#7a1d45";
+const OBJECTIVE_PATH_STATUS_IDLE_BG = "#384554";
+const SPATIAL_LEGEND_TEXT_COLOR = "#d9ebff";
+const SPATIAL_LEGEND_TITLE_TEXT = "Spatial + Objective Overlay";
+const SPATIAL_LEGEND_ITEMS = Object.freeze([
+  { label: "Known: LOS-only", backgroundColor: "#1f6c8f" },
+  { label: "Known: Room-reveal", backgroundColor: "#2d6f3d" },
+  { label: "Known: LOS+Room", backgroundColor: "#347d77" },
+  { label: "Area: Room", backgroundColor: "#246845" },
+  { label: "Area: Corridor", backgroundColor: "#7a5a13" },
+  { label: "Area: Doorway->Room", backgroundColor: "#246a7c" },
+  { label: "Area: Other", backgroundColor: "#4e5663" },
+  { label: "Path: Valid", backgroundColor: OBJECTIVE_PATH_STATUS_VALID_BG },
+  { label: "Path: Fallback", backgroundColor: OBJECTIVE_PATH_STATUS_FALLBACK_BG },
+  { label: "Path: Retrying", backgroundColor: OBJECTIVE_PATH_STATUS_RETRYING_BG },
+  { label: "Path: Idle", backgroundColor: OBJECTIVE_PATH_STATUS_IDLE_BG },
+]);
 const HUMAN_VISION_RAY_COUNT = 20;
 const HUMAN_VISION_STEP_TILES = 0.2;
 const HUMAN_VISION_WALK_RADIUS_TILES = 0.29;
@@ -233,6 +298,7 @@ export function createHumanDebugOverlay({
   commandController = null,
   renderBackdrop = true,
   renderCollisionObstacles = true,
+  getTopLeftUiInsetPx = null,
 } = {}) {
   if (!scene || !runtime || !humanController) {
     throw new Error(
@@ -242,13 +308,111 @@ export function createHumanDebugOverlay({
 
   const overlay = scene.add.graphics();
   overlay.setDepth(94);
+  const brainPanelText = scene.add.text(0, 0, "", {
+    fontFamily: "Consolas, 'Courier New', monospace",
+    fontSize: "11px",
+    color: BRAIN_PANEL_TEXT_COLOR,
+    align: "left",
+    lineSpacing: 2,
+    wordWrap: {
+      width: BRAIN_PANEL_WIDTH_PX - 20,
+      useAdvancedWrap: false,
+    },
+  });
+  brainPanelText.setDepth(95);
+  brainPanelText.setVisible(false);
+  const brainPanelBadgeTexts = Array.from({ length: 3 }, () => {
+    const badge = scene.add.text(0, 0, "", {
+      fontFamily: "Consolas, 'Courier New', monospace",
+      fontSize: "10px",
+      color: BRAIN_PANEL_BADGE_TEXT_COLOR,
+      backgroundColor: BRAIN_PANEL_BADGE_SUBTLE_BG,
+    });
+    badge.setPadding(5, 2, 5, 2);
+    badge.setDepth(95);
+    badge.setVisible(false);
+    return badge;
+  });
+  const spatialLegendTitleText = scene.add.text(0, 0, SPATIAL_LEGEND_TITLE_TEXT, {
+    fontFamily: "Consolas, 'Courier New', monospace",
+    fontSize: "10px",
+    color: SPATIAL_LEGEND_TEXT_COLOR,
+  });
+  spatialLegendTitleText.setDepth(95);
+  spatialLegendTitleText.setVisible(false);
+  const spatialLegendBadgeTexts = SPATIAL_LEGEND_ITEMS.map((item) => {
+    const badge = scene.add.text(0, 0, item.label, {
+      fontFamily: "Consolas, 'Courier New', monospace",
+      fontSize: "10px",
+      color: SPATIAL_LEGEND_TEXT_COLOR,
+      backgroundColor: item.backgroundColor,
+    });
+    badge.setPadding(5, 2, 5, 2);
+    badge.setDepth(95);
+    badge.setVisible(false);
+    return badge;
+  });
+  const objectiveStatusTagText = scene.add.text(0, 0, "", {
+    fontFamily: "Consolas, 'Courier New', monospace",
+    fontSize: "10px",
+    color: OBJECTIVE_PATH_STATUS_TEXT_COLOR,
+    backgroundColor: OBJECTIVE_PATH_STATUS_IDLE_BG,
+  });
+  objectiveStatusTagText.setPadding(5, 2, 5, 2);
+  objectiveStatusTagText.setDepth(95);
+  objectiveStatusTagText.setVisible(false);
   let enabled = false;
   let visionDebugEnabled = true;
+  let inspectedGuestId = null;
+  let inspectedGuestLabel = "";
+  let forceBrainPanelRefresh = true;
+  let lastBrainPanelRefreshAtMs = -Infinity;
+  let brainPanelCache = {
+    status: "none",
+    lines: [],
+    graph: null,
+    message: "",
+    badges: [],
+  };
+
+  function resolveTopLeftUiInsetPx() {
+    if (typeof getTopLeftUiInsetPx !== "function") {
+      return 0;
+    }
+    const inset = Number(getTopLeftUiInsetPx());
+    if (!Number.isFinite(inset) || inset <= 0) {
+      return 0;
+    }
+    return inset;
+  }
+
+  function hideBrainPanelBadges() {
+    for (const badgeText of brainPanelBadgeTexts) {
+      badgeText.setVisible(false);
+    }
+  }
+
+  function hideSpatialOverlayLegend() {
+    spatialLegendTitleText.setVisible(false);
+    for (const badgeText of spatialLegendBadgeTexts) {
+      badgeText.setVisible(false);
+    }
+  }
+
+  function hideObjectiveStatusTag() {
+    objectiveStatusTagText.setVisible(false);
+  }
 
   function setEnabled(nextEnabled) {
     enabled = Boolean(nextEnabled);
     if (!enabled) {
       overlay.clear();
+      brainPanelText.setVisible(false);
+      hideBrainPanelBadges();
+      hideSpatialOverlayLegend();
+      hideObjectiveStatusTag();
+    } else {
+      forceBrainPanelRefresh = true;
     }
   }
 
@@ -648,6 +812,384 @@ function drawVisionCone(
     );
   }
 
+  function drawGuestAreaContextDiagnostics(
+    guestDebug,
+    cameraTile,
+    tilePixels,
+    width,
+    height
+  ) {
+    const world = guestDebug?.worldPosition;
+    const inputDebug = guestDebug?.mentalModel?.inputDebug;
+    if (
+      !world ||
+      !Number.isFinite(world.x) ||
+      !Number.isFinite(world.y) ||
+      !inputDebug
+    ) {
+      return;
+    }
+
+    let color = GUEST_AREA_OTHER_COLOR;
+    if (inputDebug.doorwayTreatedAsRoom === true) {
+      color = GUEST_AREA_DOORWAY_COLOR;
+    } else if (inputDebug.inRoom === true) {
+      color = GUEST_AREA_ROOM_COLOR;
+    } else if (inputDebug.inCorridor === true) {
+      color = GUEST_AREA_CORRIDOR_COLOR;
+    }
+
+    const center = worldToScreen(world.x, world.y, cameraTile, tilePixels, width, height);
+    const markerRadius = Math.max(2, Math.round(tilePixels * 0.12));
+    const markerOffsetY = Math.max(4, Math.round(tilePixels * 0.34));
+
+    overlay.fillStyle(color, GUEST_AREA_MARKER_ALPHA);
+    overlay.fillCircle(
+      Math.round(center.x),
+      Math.round(center.y - markerOffsetY),
+      markerRadius
+    );
+    if (inputDebug.doorwayTreatedAsRoom === true) {
+      overlay.lineStyle(1, GUEST_AREA_DOORWAY_COLOR, 1);
+      overlay.beginPath();
+      overlay.moveTo(center.x - markerRadius - 1, center.y - markerOffsetY);
+      overlay.lineTo(center.x + markerRadius + 1, center.y - markerOffsetY);
+      overlay.strokePath();
+    }
+  }
+
+  function drawGuestMentalArbitrationDiagnostics(
+    guestDebug,
+    cameraTile,
+    tilePixels,
+    width,
+    height
+  ) {
+    const world = guestDebug?.worldPosition;
+    const mentalModel = guestDebug?.mentalModel;
+    const evaluation = mentalModel?.lastEvaluation;
+    if (
+      !world ||
+      !evaluation ||
+      !Number.isFinite(world.x) ||
+      !Number.isFinite(world.y)
+    ) {
+      return;
+    }
+
+    const center = worldToScreen(world.x, world.y, cameraTile, tilePixels, width, height);
+    const radiusBase = Math.max(5, tilePixels * 0.35);
+    const lineWidth = Math.max(1, Math.round(tilePixels * 0.08));
+
+    const minimumHoldSeconds = Math.max(
+      0.000001,
+      Number(evaluation.minimumHoldSeconds) || 0.000001
+    );
+    const holdSeconds = Math.max(0, Number(evaluation.objectiveHoldSeconds) || 0);
+    const holdProgress = Math.max(0, Math.min(1, holdSeconds / minimumHoldSeconds));
+    overlay.lineStyle(lineWidth, GUEST_ARBITRATION_HOLD_COLOR, 0.88);
+    overlay.beginPath();
+    overlay.arc(
+      center.x,
+      center.y,
+      radiusBase,
+      -Math.PI * 0.5,
+      -Math.PI * 0.5 + Math.PI * 2 * holdProgress,
+      false
+    );
+    overlay.strokePath();
+
+    if (evaluation.holdLocked === true) {
+      overlay.lineStyle(lineWidth, GUEST_ARBITRATION_LOCKED_COLOR, 0.95);
+      overlay.strokeCircle(center.x, center.y, radiusBase + Math.max(1, lineWidth));
+    }
+    if (evaluation.preemptionGate?.allowed === true) {
+      overlay.fillStyle(GUEST_ARBITRATION_PREEMPT_COLOR, 0.95);
+      overlay.fillCircle(
+        Math.round(center.x + radiusBase + 3),
+        Math.round(center.y - radiusBase - 1),
+        Math.max(2, Math.round(tilePixels * 0.1))
+      );
+    }
+    if (evaluation.fallback?.active === true) {
+      const retrySeconds = Math.max(0, Number(evaluation.fallback.retryRemainingSeconds) || 0);
+      const retryDelay = Math.max(
+        0.000001,
+        Number(evaluation.fallback.retryDelaySeconds) || 0.000001
+      );
+      const retryProgress = Math.max(0, Math.min(1, retrySeconds / retryDelay));
+      overlay.lineStyle(lineWidth, GUEST_ARBITRATION_FALLBACK_COLOR, 0.95);
+      overlay.beginPath();
+      overlay.arc(
+        center.x,
+        center.y,
+        radiusBase + Math.max(2, lineWidth + 1),
+        Math.PI * 0.5,
+        Math.PI * 0.5 + Math.PI * 2 * retryProgress,
+        false
+      );
+      overlay.strokePath();
+    }
+  }
+
+  function resolveObjectivePathOverlayStatus(guestDebug) {
+    const objectiveIntent = guestDebug?.objectiveIntent || null;
+    const pathStatus = objectiveIntent?.objectivePathStatus || "idle";
+    const objectiveReasonCode = objectiveIntent?.objectiveReasonCode || null;
+    const fallback = guestDebug?.mentalModel?.lastEvaluation?.fallback || null;
+
+    if (pathStatus === "retrying") {
+      return "retrying";
+    }
+    if (
+      pathStatus === "fallback" ||
+      objectiveReasonCode === "fallback" ||
+      fallback?.active === true ||
+      fallback?.applied === true
+    ) {
+      return "fallback";
+    }
+    if (pathStatus === "valid" || pathStatus === "following_path") {
+      return "valid";
+    }
+    return "idle";
+  }
+
+  function resolveObjectivePathOverlayColor(status) {
+    if (status === "valid") {
+      return OBJECTIVE_PATH_VALID_COLOR;
+    }
+    if (status === "fallback") {
+      return OBJECTIVE_PATH_FALLBACK_COLOR;
+    }
+    if (status === "retrying") {
+      return OBJECTIVE_PATH_RETRYING_COLOR;
+    }
+    return OBJECTIVE_PATH_IDLE_COLOR;
+  }
+
+  function resolveObjectivePathOverlayBackground(status) {
+    if (status === "valid") {
+      return OBJECTIVE_PATH_STATUS_VALID_BG;
+    }
+    if (status === "fallback") {
+      return OBJECTIVE_PATH_STATUS_FALLBACK_BG;
+    }
+    if (status === "retrying") {
+      return OBJECTIVE_PATH_STATUS_RETRYING_BG;
+    }
+    return OBJECTIVE_PATH_STATUS_IDLE_BG;
+  }
+
+  function drawInspectedGuestSpatialContextOverlay(
+    guestDebug,
+    cameraTile,
+    tilePixels,
+    width,
+    height
+  ) {
+    const world = guestDebug?.worldPosition;
+    if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
+      return;
+    }
+    const knowledge = getInspectedGuestTileKnowledge(
+      SPATIAL_CLASSIFIER_SAMPLE_RADIUS_TILES
+    );
+    if (
+      !knowledge ||
+      !Array.isArray(knowledge.sampleTiles) ||
+      knowledge.sampleTiles.length === 0
+    ) {
+      return;
+    }
+
+    for (const tile of knowledge.sampleTiles) {
+      if (!Number.isFinite(tile?.x) || !Number.isFinite(tile?.y)) {
+        continue;
+      }
+      const identified = tile.identified === true;
+      if (!identified) {
+        continue;
+      }
+      const rect = worldRectScreen(
+        tile.x,
+        tile.y,
+        1,
+        1,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      const sourceLos = tile.sourceLos === true;
+      const sourceRoomReveal = tile.sourceRoomReveal === true;
+      let fillColor = TILE_KNOWLEDGE_LOS_ONLY_COLOR;
+      let fillAlpha = 0.3;
+      if (sourceLos && sourceRoomReveal) {
+        fillColor = TILE_KNOWLEDGE_MIXED_COLOR;
+        fillAlpha = 0.28;
+      } else if (sourceLos) {
+        fillColor = TILE_KNOWLEDGE_LOS_ONLY_COLOR;
+        fillAlpha = 0.3;
+      } else if (sourceRoomReveal) {
+        fillColor = TILE_KNOWLEDGE_ROOM_REVEAL_COLOR;
+        fillAlpha = 0.26;
+      }
+      overlay.fillStyle(fillColor, fillAlpha);
+      overlay.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+      let borderColor = GUEST_AREA_OTHER_COLOR;
+      if (tile.doorwayTreatedAsRoom === true) {
+        borderColor = GUEST_AREA_DOORWAY_COLOR;
+      } else if (tile.inRoom === true) {
+        borderColor = GUEST_AREA_ROOM_COLOR;
+      } else if (tile.inCorridor === true) {
+        borderColor = GUEST_AREA_CORRIDOR_COLOR;
+      }
+      overlay.lineStyle(1, borderColor, identified ? 0.72 : 0.28);
+      overlay.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w, rect.h);
+
+      if (tile.doorwayTreatedAsRoom === true && identified) {
+        overlay.lineStyle(1, GUEST_AREA_DOORWAY_COLOR, 1);
+        overlay.beginPath();
+        overlay.moveTo(rect.x + 1, rect.y + 1);
+        overlay.lineTo(rect.x + rect.w - 1, rect.y + rect.h - 1);
+        overlay.moveTo(rect.x + rect.w - 1, rect.y + 1);
+        overlay.lineTo(rect.x + 1, rect.y + rect.h - 1);
+        overlay.strokePath();
+      }
+    }
+
+    if (
+      Number.isFinite(knowledge.centerTile?.x) &&
+      Number.isFinite(knowledge.centerTile?.y)
+    ) {
+      const centerRect = worldRectScreen(
+        knowledge.centerTile.x,
+        knowledge.centerTile.y,
+        1,
+        1,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      overlay.lineStyle(2, 0xffffff, 0.95);
+      overlay.strokeRect(centerRect.x + 0.5, centerRect.y + 0.5, centerRect.w, centerRect.h);
+    }
+  }
+
+  function drawInspectedGuestObjectiveOverlay(
+    guestDebug,
+    cameraTile,
+    tilePixels,
+    width,
+    height
+  ) {
+    const world = guestDebug?.worldPosition;
+    if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
+      hideObjectiveStatusTag();
+      return;
+    }
+    const objectiveIntent = guestDebug?.objectiveIntent || null;
+    if (!objectiveIntent) {
+      hideObjectiveStatusTag();
+      return;
+    }
+    const status = resolveObjectivePathOverlayStatus(guestDebug);
+    const statusColor = resolveObjectivePathOverlayColor(status);
+    const center = worldToScreen(world.x, world.y, cameraTile, tilePixels, width, height);
+    const ringRadius = Math.max(7, tilePixels * 0.5);
+    const strokeWidth = Math.max(1, Math.round(tilePixels * 0.16));
+    overlay.lineStyle(strokeWidth, statusColor, 0.95);
+    overlay.strokeCircle(Math.round(center.x), Math.round(center.y), Math.round(ringRadius));
+
+    const target = objectiveIntent?.objectiveTargetWorld || null;
+    if (Number.isFinite(target?.x) && Number.isFinite(target?.y)) {
+      const targetScreen = worldToScreen(
+        target.x,
+        target.y,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      overlay.lineStyle(strokeWidth, statusColor, 0.92);
+      overlay.beginPath();
+      overlay.moveTo(center.x, center.y);
+      overlay.lineTo(targetScreen.x, targetScreen.y);
+      overlay.strokePath();
+
+      const markerRadius = Math.max(3, Math.round(tilePixels * 0.22));
+      if (status === "retrying") {
+        overlay.lineStyle(strokeWidth, statusColor, 0.98);
+        overlay.beginPath();
+        overlay.moveTo(targetScreen.x - markerRadius, targetScreen.y - markerRadius);
+        overlay.lineTo(targetScreen.x + markerRadius, targetScreen.y + markerRadius);
+        overlay.moveTo(targetScreen.x + markerRadius, targetScreen.y - markerRadius);
+        overlay.lineTo(targetScreen.x - markerRadius, targetScreen.y + markerRadius);
+        overlay.strokePath();
+      } else if (status === "fallback") {
+        overlay.lineStyle(strokeWidth, statusColor, 0.98);
+        overlay.strokeRect(
+          Math.round(targetScreen.x - markerRadius),
+          Math.round(targetScreen.y - markerRadius),
+          markerRadius * 2,
+          markerRadius * 2
+        );
+      } else {
+        overlay.fillStyle(statusColor, 0.95);
+        overlay.fillCircle(
+          Math.round(targetScreen.x),
+          Math.round(targetScreen.y),
+          markerRadius
+        );
+      }
+    }
+
+    objectiveStatusTagText.setText(
+      `Obj ${objectiveIntent.objectiveState || "none"} | Path ${status}`
+    );
+    objectiveStatusTagText.setBackgroundColor(
+      resolveObjectivePathOverlayBackground(status)
+    );
+    const tagX = Math.max(8, Math.min(width - objectiveStatusTagText.width - 8, center.x + 10));
+    const minTagY = Math.max(8, Math.round(resolveTopLeftUiInsetPx()) + 8);
+    const tagY = Math.max(
+      minTagY,
+      Math.min(height - objectiveStatusTagText.height - 8, center.y - 24)
+    );
+    objectiveStatusTagText.setPosition(Math.round(tagX), Math.round(tagY));
+    objectiveStatusTagText.setVisible(enabled);
+  }
+
+  function drawSpatialObjectiveLegend(viewHeightPx) {
+    const startX = 10;
+    const badgeSpacingPx = 3;
+    const titleBottomGapPx = 4;
+    let legendHeightPx = spatialLegendTitleText.height + titleBottomGapPx;
+    for (let i = 0; i < spatialLegendBadgeTexts.length; i += 1) {
+      legendHeightPx += spatialLegendBadgeTexts[i].height;
+      if (i < spatialLegendBadgeTexts.length - 1) {
+        legendHeightPx += badgeSpacingPx;
+      }
+    }
+    const minStartYPx = 10;
+    const maxStartYPx = Math.max(minStartYPx, Math.floor(viewHeightPx - legendHeightPx - 10));
+    const startY = Math.min(
+      maxStartYPx,
+      minStartYPx + Math.round(resolveTopLeftUiInsetPx())
+    );
+    spatialLegendTitleText.setPosition(startX, startY);
+    spatialLegendTitleText.setVisible(enabled);
+    let cursorY = startY + spatialLegendTitleText.height + titleBottomGapPx;
+    for (const badgeText of spatialLegendBadgeTexts) {
+      badgeText.setPosition(startX, cursorY);
+      badgeText.setVisible(enabled);
+      cursorY += badgeText.height + badgeSpacingPx;
+    }
+  }
+
   function drawGuestWaypointSelectionDiagnostics(
     guestDebug,
     cameraTile,
@@ -797,6 +1339,8 @@ function drawVisionCone(
     height
   ) {
     if (!humanManagerDebug) {
+      hideSpatialOverlayLegend();
+      hideObjectiveStatusTag();
       return;
     }
     const humans = Array.isArray(humanManagerDebug.humans)
@@ -813,6 +1357,8 @@ function drawVisionCone(
       perceptionById.set(state.id, state);
     }
 
+    let inspectedGuestDebug = null;
+
     for (const human of humans) {
       if (human?.role !== "guest" || human?.alive !== true) {
         continue;
@@ -826,6 +1372,10 @@ function drawVisionCone(
       };
       const perceptionState = perceptionById.get(human.id) || null;
       const detected = perceptionState?.detected === true;
+      const isInspectedGuest = inspectedGuestId != null && human.id === inspectedGuestId;
+      if (isInspectedGuest) {
+        inspectedGuestDebug = debug;
+      }
       if (visionDebugEnabled) {
         drawVisionCone(
           centerWorld,
@@ -843,6 +1393,8 @@ function drawVisionCone(
       drawGuestWaypointSelectionDiagnostics(debug, cameraTile, tilePixels, width, height);
       drawGuestPathDiagnostics(debug, cameraTile, tilePixels, width, height);
       drawCollider(debug?.collider || null, cameraTile, tilePixels, width, height);
+      drawGuestAreaContextDiagnostics(debug, cameraTile, tilePixels, width, height);
+      drawGuestMentalArbitrationDiagnostics(debug, cameraTile, tilePixels, width, height);
       drawHeadingLine(
         centerWorld,
         headingRadians,
@@ -863,6 +1415,536 @@ function drawVisionCone(
           height
         );
       }
+    }
+
+    if (inspectedGuestDebug) {
+      drawInspectedGuestSpatialContextOverlay(
+        inspectedGuestDebug,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      drawInspectedGuestObjectiveOverlay(
+        inspectedGuestDebug,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      drawSpatialObjectiveLegend(height);
+    } else {
+      hideSpatialOverlayLegend();
+      hideObjectiveStatusTag();
+    }
+  }
+
+  function findGuestAtScreenPoint(screenX, screenY) {
+    if (!humanManager || typeof humanManager.getHumanEntries !== "function") {
+      return null;
+    }
+    const entries = humanManager.getHumanEntries({ livingOnly: true });
+    let best = null;
+    let bestDistance = Infinity;
+    for (const entry of entries) {
+      if (entry?.role !== "guest") {
+        continue;
+      }
+      const controller = entry?.controller;
+      if (
+        typeof controller?.containsScreenPoint !== "function" ||
+        typeof controller?.getScreenBounds !== "function"
+      ) {
+        continue;
+      }
+      if (!controller.containsScreenPoint(screenX, screenY)) {
+        continue;
+      }
+      const bounds = controller.getScreenBounds();
+      const centerX = bounds.x + bounds.w * 0.5;
+      const centerY = bounds.y + bounds.h * 0.5;
+      const distance = Math.hypot(screenX - centerX, screenY - centerY);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = {
+          id: entry.id,
+        };
+      }
+    }
+    return best;
+  }
+
+  function handleInspectPointer(screenX, screenY) {
+    if (!enabled) {
+      return false;
+    }
+    if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) {
+      return false;
+    }
+    const pickedGuest = findGuestAtScreenPoint(screenX, screenY);
+    if (pickedGuest) {
+      inspectedGuestId = pickedGuest.id;
+      inspectedGuestLabel = String(pickedGuest.id);
+    } else {
+      inspectedGuestId = null;
+      inspectedGuestLabel = "";
+    }
+    forceBrainPanelRefresh = true;
+    return true;
+  }
+
+  function getInspectedGuestId() {
+    return inspectedGuestId;
+  }
+
+  function getInspectedGuestWorld() {
+    if (!inspectedGuestId) {
+      return null;
+    }
+    if (!humanManager || typeof humanManager.getHumanEntries !== "function") {
+      return null;
+    }
+    const entries = humanManager.getHumanEntries({ livingOnly: true });
+    const guest = entries.find(
+      (entry) => entry?.id === inspectedGuestId && entry?.role === "guest"
+    );
+    if (!guest || typeof guest.controller?.getCurrentWorldPosition !== "function") {
+      return null;
+    }
+    const world = guest.controller.getCurrentWorldPosition();
+    if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
+      return null;
+    }
+    return {
+      x: world.x,
+      y: world.y,
+    };
+  }
+
+  function getInspectedGuestTileKnowledge(sampleRadiusTiles) {
+    if (!inspectedGuestId) {
+      return null;
+    }
+    if (
+      !humanManager ||
+      typeof humanManager.getGuestTileKnowledgeDebug !== "function"
+    ) {
+      return null;
+    }
+    return humanManager.getGuestTileKnowledgeDebug(inspectedGuestId, {
+      sampleRadiusTiles,
+    });
+  }
+
+  function deriveTopDominantContributionTerms({
+    evaluation,
+    dominantState,
+    inputs,
+    inputValues,
+    stateWeights,
+    stateBias,
+  }) {
+    if (Array.isArray(evaluation?.dominantTopContributions)) {
+      return evaluation.dominantTopContributions.slice(0, 3);
+    }
+    if (Array.isArray(evaluation?.dominantContributionTerms)) {
+      return evaluation.dominantContributionTerms.slice(0, 3);
+    }
+    const weights = stateWeights?.[dominantState] || {};
+    const terms = [
+      {
+        termType: "bias",
+        inputId: null,
+        weight: null,
+        inputValue: null,
+        contribution: Number(stateBias?.[dominantState]) || 0,
+      },
+    ];
+    for (const inputId of inputs) {
+      const inputValue = Number(inputValues[inputId]) || 0;
+      const weight = Number(weights[inputId]) || 0;
+      terms.push({
+        termType: "input",
+        inputId,
+        weight,
+        inputValue,
+        contribution: weight * inputValue,
+      });
+    }
+    terms.sort(
+      (a, b) =>
+        Math.abs(Number(b.contribution) || 0) - Math.abs(Number(a.contribution) || 0)
+    );
+    return terms.slice(0, 3);
+  }
+
+  function formatContributionTerm(term) {
+    const contribution = Number(term?.contribution) || 0;
+    const signedContribution = contribution >= 0 ? "+" : "";
+    if (term?.termType === "bias") {
+      return `bias ${signedContribution}${contribution.toFixed(3)}`;
+    }
+    const inputId = term?.inputId || "input";
+    const weight = Number(term?.weight) || 0;
+    const inputValue = Number(term?.inputValue) || 0;
+    return `${inputId} ${signedContribution}${contribution.toFixed(3)} (w=${weight.toFixed(2)}*v=${inputValue.toFixed(2)})`;
+  }
+
+  function buildDecisionBadges(evaluation) {
+    if (!evaluation) {
+      return [];
+    }
+    const badges = [];
+    const holdSeconds = Math.max(0, Number(evaluation.objectiveHoldSeconds) || 0);
+    const holdRequired = Math.max(0, Number(evaluation.minimumHoldSeconds) || 0);
+    const holdReady = holdSeconds >= holdRequired && holdRequired > 0;
+    badges.push({
+      text: `HOLD ${holdSeconds.toFixed(2)}/${holdRequired.toFixed(2)}`,
+      textColor: BRAIN_PANEL_BADGE_TEXT_COLOR,
+      backgroundColor: evaluation.holdLocked
+        ? BRAIN_PANEL_BADGE_HOLD_LOCKED_BG
+        : holdReady
+          ? BRAIN_PANEL_BADGE_HOLD_READY_BG
+          : BRAIN_PANEL_BADGE_HOLD_BG,
+    });
+
+    const gate = evaluation.preemptionGate || null;
+    if (gate) {
+      const gateLabel = gate.allowed
+        ? "PREEMPT OPEN"
+        : `PREEMPT ${gate.thresholdMet ? "T+" : "T-"} ${gate.marginMet ? "M+" : "M-"}`;
+      badges.push({
+        text: gateLabel,
+        textColor: BRAIN_PANEL_BADGE_TEXT_COLOR,
+        backgroundColor: gate.allowed
+          ? BRAIN_PANEL_BADGE_PREEMPT_OPEN_BG
+          : BRAIN_PANEL_BADGE_SUBTLE_BG,
+      });
+    } else {
+      badges.push({
+        text: "PREEMPT n/a",
+        textColor: BRAIN_PANEL_BADGE_TEXT_COLOR,
+        backgroundColor: BRAIN_PANEL_BADGE_SUBTLE_BG,
+      });
+    }
+
+    const retrySeconds = Math.max(
+      0,
+      Number(evaluation.fallback?.retryRemainingSeconds) || 0
+    );
+    const retryCount = Math.max(0, Number(evaluation.fallback?.retryCount) || 0);
+    badges.push({
+      text:
+        evaluation.fallback?.active === true
+          ? `RETRY ${retrySeconds.toFixed(2)}s #${retryCount}`
+          : `RETRY OFF #${retryCount}`,
+      textColor: BRAIN_PANEL_BADGE_TEXT_COLOR,
+      backgroundColor:
+        evaluation.fallback?.active === true
+          ? BRAIN_PANEL_BADGE_RETRY_ACTIVE_BG
+          : BRAIN_PANEL_BADGE_SUBTLE_BG,
+    });
+    return badges;
+  }
+
+  function buildGuestBrainPanelCache(humanManagerDebug) {
+    if (!inspectedGuestId) {
+      return {
+        status: "none",
+        message: "Guest Brain Inspect\nAlt + Left Click a guest to inspect.",
+        lines: [],
+        graph: null,
+        badges: [],
+      };
+    }
+    const humans = Array.isArray(humanManagerDebug?.humans) ? humanManagerDebug.humans : [];
+    const inspected = humans.find((human) => human?.id === inspectedGuestId) || null;
+    if (!inspected) {
+      return {
+        status: "unavailable",
+        message: `Guest Brain Inspect\nGuest ${inspectedGuestLabel || inspectedGuestId} unavailable (dead/despawned).`,
+        lines: [],
+        graph: null,
+        badges: [],
+      };
+    }
+    if (inspected.role !== "guest") {
+      return {
+        status: "invalid",
+        message: `Guest Brain Inspect\nEntity ${inspected.id} is not a guest.`,
+        lines: [],
+        graph: null,
+        badges: [],
+      };
+    }
+    if (inspected.alive !== true) {
+      return {
+        status: "unavailable",
+        message: `Guest Brain Inspect\nGuest ${inspected.id} unavailable (dead/despawned).`,
+        lines: [],
+        graph: null,
+        badges: [],
+      };
+    }
+    const debug = inspected.debug || null;
+    const mentalModel = debug?.mentalModel || null;
+    const evaluation = mentalModel?.lastEvaluation || null;
+    const config = humanManagerDebug?.guestMentalModel || null;
+    if (!mentalModel || !evaluation || !config?.enabled) {
+      return {
+        status: "missing_payload",
+        message: `Guest Brain Inspect\nGuest ${inspected.id} has no mental-model payload.`,
+        lines: [],
+        graph: null,
+        badges: [],
+      };
+    }
+
+    const states = Array.isArray(config.states) ? config.states : [];
+    const inputs = Array.isArray(config.inputs) ? config.inputs : [];
+    const disabledStates = new Set(
+      Array.isArray(config.disabledStates) ? config.disabledStates : []
+    );
+    const scoresByState = evaluation.scoresByState || {};
+    const inputValues = evaluation.inputValues || {};
+    const stateWeights = config.stateWeights || {};
+    const stateBias = config.stateBias || {};
+    const dominantState = evaluation.dominantState || "none";
+    const objectiveState = evaluation.objectiveState || "none";
+    const transitionReasonCode =
+      evaluation.objectiveTransitionReasonCode ||
+      evaluation.arbitrationReasonCode ||
+      "n/a";
+    const fallbackReason =
+      evaluation.fallback?.lastFailureReason ||
+      evaluation.pathFeedback?.reason ||
+      "none";
+    const topContributionTerms = deriveTopDominantContributionTerms({
+      evaluation,
+      dominantState,
+      inputs,
+      inputValues,
+      stateWeights,
+      stateBias,
+    });
+    const whyWonText =
+      topContributionTerms.length > 0
+        ? topContributionTerms.map(formatContributionTerm).join(" | ")
+        : "n/a";
+
+    const lines = [];
+    lines.push(`Guest Brain Inspect`);
+    lines.push(`Guest: ${inspected.id}`);
+    lines.push(
+      `Dominant: ${dominantState} | Objective: ${objectiveState} | Arbitration: ${
+        evaluation.arbitrationReasonCode || "n/a"
+      }`
+    );
+    lines.push(
+      `Transition: ${evaluation.previousObjectiveState || "none"} -> ${objectiveState} (${transitionReasonCode})`
+    );
+    lines.push(`Why this won (top 3): ${whyWonText}`);
+    lines.push(
+      `Fallback: reason=${fallbackReason} | retry=${(Number(evaluation.fallback?.retryRemainingSeconds) || 0).toFixed(2)}s | count=${Math.max(0, Math.floor(Number(evaluation.fallback?.retryCount) || 0))}`
+    );
+    lines.push(`Inputs:`);
+    for (const inputId of inputs) {
+      const value = Number(inputValues[inputId]) || 0;
+      const inactive = mentalModel?.inputDebug?.inactiveInputs?.[inputId] === true;
+      lines.push(`  - ${inputId}: ${value.toFixed(2)}${inactive ? " (inactive=0)" : ""}`);
+    }
+    lines.push(`Scores:`);
+    for (const stateId of states) {
+      const score = Number(scoresByState[stateId]) || 0;
+      const disabled = disabledStates.has(stateId);
+      lines.push(
+        `  - ${stateId}: ${score.toFixed(2)}${disabled ? " [disabled]" : ""}`
+      );
+    }
+    lines.push(`Contrib (${dominantState}):`);
+    const dominantWeights = stateWeights?.[dominantState] || {};
+    for (const inputId of inputs) {
+      const inputValue = Number(inputValues[inputId]) || 0;
+      const weight = Number(dominantWeights[inputId]) || 0;
+      const contribution = weight * inputValue;
+      const sign = contribution >= 0 ? "+" : "";
+      lines.push(
+        `  - ${inputId}: ${sign}${contribution.toFixed(3)} (w=${weight.toFixed(2)} x v=${inputValue.toFixed(2)})`
+      );
+    }
+    lines.push(`  - bias: ${(Number(stateBias[dominantState]) || 0).toFixed(2)}`);
+
+    const inputNodes = [];
+    const stateNodes = [];
+    const edges = [];
+    const graphLeftX = 26;
+    const graphRightX = BRAIN_PANEL_WIDTH_PX - 28;
+    const graphTopY = BRAIN_PANEL_GRAPH_TOP_PX + 18;
+    const graphBottomY = graphTopY + (BRAIN_PANEL_GRAPH_HEIGHT_PX - 32);
+    const inputGap =
+      inputs.length > 1 ? (graphBottomY - graphTopY) / (inputs.length - 1) : 0;
+    const stateGap =
+      states.length > 1 ? (graphBottomY - graphTopY) / (states.length - 1) : 0;
+    for (let i = 0; i < inputs.length; i += 1) {
+      const inputId = inputs[i];
+      inputNodes.push({
+        id: inputId,
+        x: graphLeftX,
+        y: graphTopY + inputGap * i,
+        value: Number(inputValues[inputId]) || 0,
+        inactive: mentalModel?.inputDebug?.inactiveInputs?.[inputId] === true,
+      });
+    }
+    for (let j = 0; j < states.length; j += 1) {
+      const stateId = states[j];
+      stateNodes.push({
+        id: stateId,
+        x: graphRightX,
+        y: graphTopY + stateGap * j,
+        score: Number(scoresByState[stateId]) || 0,
+        disabled: disabledStates.has(stateId),
+        dominant: stateId === dominantState,
+      });
+    }
+    for (const stateNode of stateNodes) {
+      for (const inputNode of inputNodes) {
+        const weight = Number(stateWeights?.[stateNode.id]?.[inputNode.id]) || 0;
+        const contribution = weight * inputNode.value;
+        const absContribution = Math.abs(contribution);
+        edges.push({
+          fromX: inputNode.x,
+          fromY: inputNode.y,
+          toX: stateNode.x,
+          toY: stateNode.y,
+          color: stateNode.disabled
+            ? BRAIN_PANEL_DISABLED_LINK_COLOR
+            : contribution >= 0
+              ? BRAIN_PANEL_POSITIVE_LINK_COLOR
+              : BRAIN_PANEL_NEGATIVE_LINK_COLOR,
+          alpha: stateNode.disabled
+            ? 0.18
+            : 0.08 + Math.min(0.65, absContribution * 1.35),
+          width: 1 + Math.min(2.5, absContribution * 3.2),
+        });
+      }
+    }
+
+    return {
+      status: "ok",
+      lines,
+      message: lines.join("\n"),
+      badges: buildDecisionBadges(evaluation),
+      graph: {
+        inputNodes,
+        stateNodes,
+        edges,
+      },
+    };
+  }
+
+  function drawGuestBrainInspectPanel(humanManagerDebug, viewWidthPx, viewHeightPx) {
+    const nowMs = scene.time?.now ?? performance.now();
+    if (
+      forceBrainPanelRefresh ||
+      nowMs - lastBrainPanelRefreshAtMs >= BRAIN_PANEL_REFRESH_INTERVAL_MS
+    ) {
+      brainPanelCache = buildGuestBrainPanelCache(humanManagerDebug);
+      lastBrainPanelRefreshAtMs = nowMs;
+      forceBrainPanelRefresh = false;
+      brainPanelText.setText(brainPanelCache.message || "");
+    }
+
+    const panelX = Math.max(4, viewWidthPx - BRAIN_PANEL_WIDTH_PX - BRAIN_PANEL_MARGIN_PX);
+    const messageLineCount = Math.max(
+      1,
+      String(brainPanelCache.message || "").split("\n").length
+    );
+    const estimatedTextHeight = messageLineCount * 14 + 16;
+    const graphBlockBottomY = BRAIN_PANEL_GRAPH_TOP_PX + BRAIN_PANEL_GRAPH_HEIGHT_PX;
+    const textTopY = graphBlockBottomY + BRAIN_PANEL_TEXT_TOP_GAP_PX;
+    const panelHeight = Math.max(
+      BRAIN_PANEL_MIN_HEIGHT_PX,
+      textTopY + estimatedTextHeight + 14
+    );
+    const cappedPanelHeight = Math.min(panelHeight, Math.max(120, viewHeightPx - 24));
+    const panelY = BRAIN_PANEL_MARGIN_PX;
+
+    overlay.fillStyle(BRAIN_PANEL_BACKGROUND_COLOR, BRAIN_PANEL_BACKGROUND_ALPHA);
+    overlay.fillRect(panelX, panelY, BRAIN_PANEL_WIDTH_PX, cappedPanelHeight);
+    overlay.lineStyle(1, BRAIN_PANEL_BORDER_COLOR, BRAIN_PANEL_BORDER_ALPHA);
+    overlay.strokeRect(panelX + 0.5, panelY + 0.5, BRAIN_PANEL_WIDTH_PX, cappedPanelHeight);
+    overlay.lineStyle(1, BRAIN_PANEL_ACCENT_COLOR, 0.9);
+    overlay.beginPath();
+    overlay.moveTo(panelX + 10, panelY + BRAIN_PANEL_GRAPH_TOP_PX - 8);
+    overlay.lineTo(panelX + BRAIN_PANEL_WIDTH_PX - 10, panelY + BRAIN_PANEL_GRAPH_TOP_PX - 8);
+    overlay.strokePath();
+    overlay.lineStyle(1, BRAIN_PANEL_ACCENT_COLOR, 0.45);
+    overlay.strokeRect(
+      panelX + 10.5,
+      panelY + BRAIN_PANEL_GRAPH_TOP_PX + 0.5,
+      BRAIN_PANEL_WIDTH_PX - 21,
+      BRAIN_PANEL_GRAPH_HEIGHT_PX
+    );
+
+    const badges = Array.isArray(brainPanelCache.badges) ? brainPanelCache.badges : [];
+    let badgeX = panelX + 10;
+    const badgeY = panelY + 10;
+    for (let i = 0; i < brainPanelBadgeTexts.length; i += 1) {
+      const badgeText = brainPanelBadgeTexts[i];
+      const badge = badges[i];
+      if (!badge) {
+        badgeText.setVisible(false);
+        continue;
+      }
+      badgeText.setText(String(badge.text || ""));
+      badgeText.setColor(badge.textColor || BRAIN_PANEL_BADGE_TEXT_COLOR);
+      badgeText.setBackgroundColor(badge.backgroundColor || BRAIN_PANEL_BADGE_SUBTLE_BG);
+      badgeText.setPosition(Math.round(badgeX), Math.round(badgeY));
+      badgeText.setVisible(enabled);
+      badgeX += badgeText.width + 6;
+    }
+
+    const graph = brainPanelCache.graph;
+    if (graph && brainPanelCache.status === "ok") {
+      for (const edge of graph.edges) {
+        overlay.lineStyle(edge.width, edge.color, edge.alpha);
+        overlay.beginPath();
+        overlay.moveTo(panelX + edge.fromX, panelY + edge.fromY);
+        overlay.lineTo(panelX + edge.toX, panelY + edge.toY);
+        overlay.strokePath();
+      }
+      for (const node of graph.inputNodes) {
+        overlay.fillStyle(
+          node.inactive ? BRAIN_PANEL_DISABLED_NODE_COLOR : BRAIN_PANEL_INPUT_NODE_COLOR,
+          0.95
+        );
+        overlay.fillCircle(
+          Math.round(panelX + node.x),
+          Math.round(panelY + node.y),
+          4
+        );
+      }
+      for (const node of graph.stateNodes) {
+        const fillColor = node.disabled
+          ? BRAIN_PANEL_DISABLED_NODE_COLOR
+          : node.dominant
+            ? BRAIN_PANEL_DOMINANT_NODE_COLOR
+            : BRAIN_PANEL_STATE_NODE_COLOR;
+        overlay.fillStyle(fillColor, 0.98);
+        overlay.fillCircle(
+          Math.round(panelX + node.x),
+          Math.round(panelY + node.y),
+          node.dominant ? 5 : 4
+        );
+      }
+    }
+
+    brainPanelText.setPosition(panelX + 10, panelY + textTopY);
+    brainPanelText.setVisible(enabled);
+    if (brainPanelCache.status === "ok") {
+      brainPanelText.setColor(BRAIN_PANEL_TEXT_COLOR);
+    } else {
+      brainPanelText.setColor(BRAIN_PANEL_DISABLED_TEXT_COLOR);
     }
   }
 
@@ -925,11 +2007,21 @@ function drawVisionCone(
       viewWidthPx,
       viewHeightPx
     );
+    drawGuestBrainInspectPanel(humanManagerDebug, viewWidthPx, viewHeightPx);
   }
 
   function destroy() {
     overlay.clear();
     overlay.destroy();
+    brainPanelText.destroy();
+    for (const badgeText of brainPanelBadgeTexts) {
+      badgeText.destroy();
+    }
+    spatialLegendTitleText.destroy();
+    for (const badgeText of spatialLegendBadgeTexts) {
+      badgeText.destroy();
+    }
+    objectiveStatusTagText.destroy();
   }
 
   return {
@@ -937,8 +2029,17 @@ function drawVisionCone(
     isEnabled,
     setVisionDebugEnabled,
     isVisionDebugEnabled,
+    handleInspectPointer,
+    getInspectedGuestId,
+    getInspectedGuestWorld,
     renderFrame,
-    clear: () => overlay.clear(),
+    clear: () => {
+      overlay.clear();
+      brainPanelText.setVisible(false);
+      hideBrainPanelBadges();
+      hideSpatialOverlayLegend();
+      hideObjectiveStatusTag();
+    },
     destroy,
   };
 }

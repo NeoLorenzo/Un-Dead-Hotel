@@ -1,4 +1,10 @@
 import { createHumanController } from "./humanController.js";
+import {
+  createGuestMentalRuntimeState,
+  evaluateGuestMentalModel,
+  validateGuestMentalModelConfig,
+} from "./guestMentalModel.js";
+import { createGuestMentalModelInputAdapter } from "./guestMentalModelInputs.js";
 import { createHumanPerception } from "./humanPerception.js";
 import { createZombieWanderPlanner } from "../zombie/zombieWanderPlanner.js";
 import {
@@ -28,6 +34,9 @@ const DEFAULT_GUEST_WANDER_FAILED_SECTOR_MEMORY_TTL_SECONDS = 1.5;
 const DEFAULT_GUEST_WANDER_FAILED_SECTOR_HALF_ANGLE_DEGREES = 18;
 const DEFAULT_GUEST_WANDER_NO_CANDIDATE_REPICK_COOLDOWN_SECONDS = 0.12;
 const DEFAULT_GUEST_WANDER_CONE_CLIP_RAY_COUNT = 20;
+const DEFAULT_GUEST_MENTAL_EVALUATION_CADENCE_HZ = 4;
+const DEFAULT_GUEST_TILE_KNOWLEDGE_SAMPLE_RADIUS_TILES = 6;
+const MAX_GUEST_TILE_KNOWLEDGE_DEBUG_SAMPLE_TILES = 1024;
 const LOCOMOTION_SUB_TILE_SIZE_TILES = 0.25;
 const SOFT_SEPARATION_MIN_DISTANCE_TILES = HUMAN_COLLIDER_RADIUS_TILES * 2;
 const SOFT_SEPARATION_STRENGTH = 0.45;
@@ -53,6 +62,27 @@ function normalizeAngleRadians(angleRadians) {
     angle += Math.PI * 2;
   }
   return angle;
+}
+
+function worldTileKey(tileX, tileY) {
+  return `${Math.floor(tileX)},${Math.floor(tileY)}`;
+}
+
+function parseWorldTileKey(key) {
+  const source = String(key || "");
+  const commaIndex = source.indexOf(",");
+  if (commaIndex <= 0 || commaIndex >= source.length - 1) {
+    return null;
+  }
+  const tileX = Number(source.slice(0, commaIndex));
+  const tileY = Number(source.slice(commaIndex + 1));
+  if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+    return null;
+  }
+  return {
+    x: Math.floor(tileX),
+    y: Math.floor(tileY),
+  };
 }
 
 function getDeterministicIdHash(id) {
@@ -117,10 +147,41 @@ export function createHumanManager({
   naturalGuestPolicy = null,
   guestPerceptionPolicy = null,
   guestBehaviorPolicy = null,
+  guestMentalModelConfig = null,
 } = {}) {
   if (!scene || !runtime) {
     throw new Error("createHumanManager requires scene and runtime.");
   }
+  const resolvedGuestMentalModelConfig =
+    guestMentalModelConfig == null
+      ? null
+      : validateGuestMentalModelConfig(guestMentalModelConfig, {
+          label: "createHumanManager guestMentalModelConfig",
+        });
+  const guestMentalModelEnabled = resolvedGuestMentalModelConfig != null;
+  const guestMentalEvaluationCadenceHz = guestMentalModelEnabled
+    ? Math.max(
+        0.01,
+        Number(resolvedGuestMentalModelConfig.evaluationCadenceHz) ||
+          DEFAULT_GUEST_MENTAL_EVALUATION_CADENCE_HZ
+      )
+    : 0;
+  const guestMentalEvaluationIntervalSeconds =
+    guestMentalEvaluationCadenceHz > 0 ? 1 / guestMentalEvaluationCadenceHz : Infinity;
+  const guestTileKnowledgeById = new Map();
+  const guestMentalInputAdapter = guestMentalModelEnabled
+    ? createGuestMentalModelInputAdapter({
+        runtime,
+        areaContextResolver: ({
+          guestController = null,
+          guestId = null,
+        } = {}) =>
+          resolveGuestPerceivedAreaContext({
+            guestController,
+            guestId,
+          }),
+      })
+    : null;
 
   const humansById = new Map();
   let nextGuestId = 1;
@@ -232,9 +293,12 @@ export function createHumanManager({
       DEFAULT_GUEST_WANDER_NO_CANDIDATE_REPICK_COOLDOWN_SECONDS
   );
   const guestBehaviorById = new Map();
+  const guestMentalPathFeedbackById = new Map();
   const guestWaypointSelectionDebugById = new Map();
   const guestWanderStateById = new Map();
+  const guestMentalStateById = new Map();
   let lastGuestBehaviorCycle = null;
+  let lastGuestMentalCycle = null;
   let totalGuestConversions = 0;
   let lastGuestConversionCycle = null;
   let debugEnabled = false;
@@ -559,8 +623,11 @@ export function createHumanManager({
 
     guestPerceptionById.delete(guestId);
     guestBehaviorById.delete(guestId);
+    guestTileKnowledgeById.delete(guestId);
+    guestMentalPathFeedbackById.delete(guestId);
     guestWaypointSelectionDebugById.delete(guestId);
     guestWanderStateById.delete(guestId);
+    guestMentalStateById.delete(guestId);
     totalGuestConversions += 1;
     return true;
   }
@@ -809,8 +876,11 @@ export function createHumanManager({
     humansById.delete(humanId);
     guestPerceptionById.delete(humanId);
     guestBehaviorById.delete(humanId);
+    guestTileKnowledgeById.delete(humanId);
+    guestMentalPathFeedbackById.delete(humanId);
     guestWaypointSelectionDebugById.delete(humanId);
     guestWanderStateById.delete(humanId);
+    guestMentalStateById.delete(humanId);
     return true;
   }
 
@@ -950,8 +1020,11 @@ export function createHumanManager({
       (previous?.targetId ?? null) !== (nextState?.targetId ?? null);
     const detectedChanged =
       Boolean(previous?.detected) !== Boolean(nextState?.detected);
+    const visibleTileCountChanged =
+      Math.floor(Number(previous?.visibleTileCount) || 0) !==
+      Math.floor(Number(nextState?.visibleTileCount) || 0);
     guestPerceptionById.set(humanId, nextState);
-    return targetChanged || detectedChanged;
+    return targetChanged || detectedChanged || visibleTileCountChanged;
   }
 
   function runGuestPerceptionStep() {
@@ -971,10 +1044,17 @@ export function createHumanManager({
     let detectedGuestCount = 0;
     let inConeCount = 0;
     let lineOfSightClearCount = 0;
+    let visibleTileCount = 0;
+    let roomRevealTileCount = 0;
 
     for (const [humanId] of guestPerceptionById.entries()) {
       if (!activeGuestIds.has(humanId)) {
         guestPerceptionById.delete(humanId);
+      }
+    }
+    for (const [humanId] of guestTileKnowledgeById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestTileKnowledgeById.delete(humanId);
       }
     }
 
@@ -996,9 +1076,15 @@ export function createHumanManager({
       });
       inConeCount += Number(evaluation?.stats?.inConeCount) || 0;
       lineOfSightClearCount += Number(evaluation?.stats?.lineOfSightClearCount) || 0;
+      visibleTileCount += Number(evaluation?.stats?.visibleTileCount) || 0;
       if (evaluation.detected) {
         detectedGuestCount += 1;
       }
+      const tileKnowledgeUpdate = updateGuestTileKnowledgeFromVisibleTiles(
+        guest.id,
+        Array.isArray(evaluation?.visibleTiles) ? evaluation.visibleTiles : []
+      );
+      roomRevealTileCount += Number(tileKnowledgeUpdate?.roomRevealTileCount) || 0;
 
       const nearest = evaluation?.nearestVisibleTarget || null;
       const nextState = {
@@ -1013,6 +1099,10 @@ export function createHumanManager({
         distanceToTarget: Number.isFinite(nearest?.distance)
           ? nearest.distance
           : null,
+        visibleTileCount: Math.max(
+          0,
+          Math.floor(Number(evaluation?.stats?.visibleTileCount) || 0)
+        ),
       };
       if (setGuestPerceptionState(guest.id, nextState)) {
         changed = true;
@@ -1027,6 +1117,8 @@ export function createHumanManager({
       detectedGuestCount,
       inConeCount,
       lineOfSightClearCount,
+      visibleTileCount,
+      roomRevealTileCount,
       lineCheckStepTiles: config.lineCheckStepTiles,
     };
 
@@ -1038,6 +1130,12 @@ export function createHumanManager({
     if (!state) {
       state = {
         mode: "wander",
+        objectiveState: "wander",
+        objectiveDispatchMode: "wander",
+        objectiveReasonCode: null,
+        objectivePathStatus: "idle",
+        objectiveFailureReason: null,
+        objectiveTargetWorld: null,
         replanCooldownSeconds: 0,
         lastPlanReason: null,
         targetId: null,
@@ -1045,6 +1143,573 @@ export function createHumanManager({
       guestBehaviorById.set(humanId, state);
     }
     return state;
+  }
+
+  function createInitialGuestTileKnowledgeState(humanId) {
+    return {
+      id: humanId,
+      identifiedTiles: new Set(),
+      tileSources: new Map(),
+      knownRoomKeys: new Set(),
+      lastLosTileKeys: new Set(),
+      lastRoomRevealTileKeys: new Set(),
+      lastUpdatedAtMs: -Infinity,
+    };
+  }
+
+  function getGuestTileKnowledgeState(humanId) {
+    let state = guestTileKnowledgeById.get(humanId);
+    if (!state) {
+      state = createInitialGuestTileKnowledgeState(humanId);
+      guestTileKnowledgeById.set(humanId, state);
+    }
+    return state;
+  }
+
+  function markTileKnowledgeSource(tileKnowledgeState, tileX, tileY, source) {
+    if (!tileKnowledgeState) {
+      return;
+    }
+    const normalizedTileX = Math.floor(tileX);
+    const normalizedTileY = Math.floor(tileY);
+    if (!Number.isFinite(normalizedTileX) || !Number.isFinite(normalizedTileY)) {
+      return;
+    }
+    const key = worldTileKey(normalizedTileX, normalizedTileY);
+    tileKnowledgeState.identifiedTiles.add(key);
+    const existing =
+      tileKnowledgeState.tileSources.get(key) || { los: false, roomReveal: false };
+    if (source === "room_reveal") {
+      existing.roomReveal = true;
+    } else {
+      existing.los = true;
+    }
+    tileKnowledgeState.tileSources.set(key, existing);
+  }
+
+  function classifyTileAtTile(tileX, tileY) {
+    if (typeof runtime?.classifyAreaAtWorld !== "function") {
+      return null;
+    }
+    const centerX = Math.floor(tileX) + 0.5;
+    const centerY = Math.floor(tileY) + 0.5;
+    return runtime.classifyAreaAtWorld(centerX, centerY);
+  }
+
+  function updateGuestTileKnowledgeFromVisibleTiles(humanId, visibleTiles = []) {
+    const tileKnowledgeState = getGuestTileKnowledgeState(humanId);
+    const losTileKeys = new Set();
+    const roomsToReveal = new Map();
+    const roomRevealTileKeys = new Set();
+
+    for (const tile of visibleTiles) {
+      const tileX = Math.floor(Number(tile?.x));
+      const tileY = Math.floor(Number(tile?.y));
+      if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+        continue;
+      }
+      const tileKeyValue = worldTileKey(tileX, tileY);
+      losTileKeys.add(tileKeyValue);
+      markTileKnowledgeSource(tileKnowledgeState, tileX, tileY, "los");
+
+      const classified = classifyTileAtTile(tileX, tileY);
+      if (!classified || (classified.inRoom !== true && classified.doorwayTreatedAsRoom !== true)) {
+        continue;
+      }
+      let roomData = null;
+      if (
+        typeof runtime?.getRoomTilesByReference === "function" &&
+        Number.isFinite(classified.chunkX) &&
+        Number.isFinite(classified.chunkY) &&
+        Number.isFinite(classified.roomIndex)
+      ) {
+        roomData = runtime.getRoomTilesByReference(
+          classified.chunkX,
+          classified.chunkY,
+          classified.roomIndex
+        );
+      }
+      if (
+        !roomData &&
+        typeof runtime?.getRoomTilesAtWorld === "function"
+      ) {
+        roomData = runtime.getRoomTilesAtWorld(tileX + 0.5, tileY + 0.5);
+      }
+      if (!roomData?.roomKey || !Array.isArray(roomData.tiles)) {
+        continue;
+      }
+      if (tileKnowledgeState.knownRoomKeys.has(roomData.roomKey)) {
+        continue;
+      }
+      roomsToReveal.set(roomData.roomKey, roomData);
+    }
+
+    for (const [roomKey, roomData] of roomsToReveal.entries()) {
+      tileKnowledgeState.knownRoomKeys.add(roomKey);
+      for (const tile of roomData.tiles) {
+        const tileX = Math.floor(Number(tile?.x));
+        const tileY = Math.floor(Number(tile?.y));
+        if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+          continue;
+        }
+        const tileKeyValue = worldTileKey(tileX, tileY);
+        roomRevealTileKeys.add(tileKeyValue);
+        markTileKnowledgeSource(tileKnowledgeState, tileX, tileY, "room_reveal");
+      }
+    }
+
+    tileKnowledgeState.lastLosTileKeys = losTileKeys;
+    tileKnowledgeState.lastRoomRevealTileKeys = roomRevealTileKeys;
+    tileKnowledgeState.lastUpdatedAtMs = scene.time?.now ?? performance.now();
+
+    return {
+      losTileCount: losTileKeys.size,
+      roomRevealTileCount: roomRevealTileKeys.size,
+      identifiedTileCount: tileKnowledgeState.identifiedTiles.size,
+      knownRoomCount: tileKnowledgeState.knownRoomKeys.size,
+    };
+  }
+
+  function resolveGuestPerceivedAreaContext({
+    guestController = null,
+    guestId = null,
+  } = {}) {
+    if (
+      !guestController ||
+      typeof guestController.getCurrentWorldPosition !== "function" ||
+      typeof runtime?.classifyAreaAtWorld !== "function" ||
+      typeof runtime?.worldToTile !== "function"
+    ) {
+      return {
+        inRoom: false,
+        inCorridor: false,
+        classification: "unknown",
+        doorwayTreatedAsRoom: false,
+        isDoorwayTile: false,
+        tileX: null,
+        tileY: null,
+        tile: null,
+        roomIndex: null,
+        chunkX: null,
+        chunkY: null,
+        identifiedByMemory: false,
+        identifiedSourceLos: false,
+        identifiedSourceRoomReveal: false,
+      };
+    }
+
+    const world = guestController.getCurrentWorldPosition();
+    if (!isFiniteNumber(world?.x) || !isFiniteNumber(world?.y)) {
+      return {
+        inRoom: false,
+        inCorridor: false,
+        classification: "unknown",
+        doorwayTreatedAsRoom: false,
+        isDoorwayTile: false,
+        tileX: null,
+        tileY: null,
+        tile: null,
+        roomIndex: null,
+        chunkX: null,
+        chunkY: null,
+        identifiedByMemory: false,
+        identifiedSourceLos: false,
+        identifiedSourceRoomReveal: false,
+      };
+    }
+
+    const tile = runtime.worldToTile(world.x, world.y);
+    const tileX = Math.floor(tile.x);
+    const tileY = Math.floor(tile.y);
+    const tileKeyValue = worldTileKey(tileX, tileY);
+    const classified = runtime.classifyAreaAtWorld(world.x, world.y);
+    const tileKnowledgeState =
+      guestId != null ? guestTileKnowledgeById.get(guestId) : null;
+    const identified = tileKnowledgeState?.identifiedTiles?.has(tileKeyValue) === true;
+    const sourceFlags = tileKnowledgeState?.tileSources?.get(tileKeyValue) || null;
+
+    if (!identified) {
+      return {
+        inRoom: false,
+        inCorridor: false,
+        classification: "unknown",
+        doorwayTreatedAsRoom: false,
+        isDoorwayTile: false,
+        tileX: Number.isFinite(classified?.tileX) ? classified.tileX : tileX,
+        tileY: Number.isFinite(classified?.tileY) ? classified.tileY : tileY,
+        tile: Number.isFinite(classified?.tile) ? classified.tile : null,
+        roomIndex: null,
+        chunkX: Number.isFinite(classified?.chunkX) ? classified.chunkX : null,
+        chunkY: Number.isFinite(classified?.chunkY) ? classified.chunkY : null,
+        identifiedByMemory: false,
+        identifiedSourceLos: false,
+        identifiedSourceRoomReveal: false,
+      };
+    }
+
+    return {
+      inRoom: classified?.inRoom === true,
+      inCorridor: classified?.inCorridor === true,
+      classification: classified?.classification || "other",
+      doorwayTreatedAsRoom: classified?.doorwayTreatedAsRoom === true,
+      isDoorwayTile: classified?.isDoorwayTile === true,
+      tileX: Number.isFinite(classified?.tileX) ? classified.tileX : tileX,
+      tileY: Number.isFinite(classified?.tileY) ? classified.tileY : tileY,
+      tile: Number.isFinite(classified?.tile) ? classified.tile : null,
+      roomIndex: Number.isFinite(classified?.roomIndex) ? classified.roomIndex : null,
+      chunkX: Number.isFinite(classified?.chunkX) ? classified.chunkX : null,
+      chunkY: Number.isFinite(classified?.chunkY) ? classified.chunkY : null,
+      identifiedByMemory: true,
+      identifiedSourceLos: sourceFlags?.los === true,
+      identifiedSourceRoomReveal: sourceFlags?.roomReveal === true,
+    };
+  }
+
+  function buildGuestTileKnowledgeDebug(guestId, options = {}) {
+    const tileKnowledgeState = guestTileKnowledgeById.get(guestId);
+    if (!tileKnowledgeState) {
+      return null;
+    }
+    const humanEntry = humansById.get(guestId);
+    if (!humanEntry?.controller || !isControllerAlive(humanEntry.controller)) {
+      return null;
+    }
+    if (
+      typeof humanEntry.controller.getCurrentWorldPosition !== "function" ||
+      typeof runtime?.worldToTile !== "function" ||
+      typeof runtime?.classifyAreaAtWorld !== "function"
+    ) {
+      return null;
+    }
+
+    const world = humanEntry.controller.getCurrentWorldPosition();
+    if (!isFiniteNumber(world?.x) || !isFiniteNumber(world?.y)) {
+      return null;
+    }
+    const centerTile = runtime.worldToTile(world.x, world.y);
+    const centerTileX = Math.floor(centerTile.x);
+    const centerTileY = Math.floor(centerTile.y);
+    const sampleRadiusTiles = Math.max(
+      1,
+      Math.floor(
+        Number(options?.sampleRadiusTiles) ||
+          DEFAULT_GUEST_TILE_KNOWLEDGE_SAMPLE_RADIUS_TILES
+      )
+    );
+    const maxSampleTiles = Math.max(
+      32,
+      Math.floor(Number(options?.maxSampleTiles) || MAX_GUEST_TILE_KNOWLEDGE_DEBUG_SAMPLE_TILES)
+    );
+    const orderedTileKeys = [];
+    const enqueuedTileKeys = new Set();
+    const sampleTiles = [];
+    const enqueueTileKey = (tileX, tileY) => {
+      if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+        return;
+      }
+      const normalizedTileX = Math.floor(tileX);
+      const normalizedTileY = Math.floor(tileY);
+      const key = worldTileKey(normalizedTileX, normalizedTileY);
+      if (enqueuedTileKeys.has(key)) {
+        return;
+      }
+      enqueuedTileKeys.add(key);
+      orderedTileKeys.push(key);
+    };
+
+    // Ensure focal tile is always included.
+    enqueueTileKey(centerTileX, centerTileY);
+
+    // Priority 1: full current LOS footprint.
+    for (const key of tileKnowledgeState.lastLosTileKeys) {
+      const parsed = parseWorldTileKey(key);
+      if (parsed) {
+        enqueueTileKey(parsed.x, parsed.y);
+      }
+    }
+
+    // Priority 2: room tiles revealed from recent LOS room/doorway identification.
+    for (const key of tileKnowledgeState.lastRoomRevealTileKeys) {
+      const parsed = parseWorldTileKey(key);
+      if (parsed) {
+        enqueueTileKey(parsed.x, parsed.y);
+      }
+    }
+
+    // Priority 3: local context window around the inspected guest.
+    for (
+      let tileY = centerTileY - sampleRadiusTiles;
+      tileY <= centerTileY + sampleRadiusTiles;
+      tileY += 1
+    ) {
+      for (
+        let tileX = centerTileX - sampleRadiusTiles;
+        tileX <= centerTileX + sampleRadiusTiles;
+        tileX += 1
+      ) {
+        enqueueTileKey(tileX, tileY);
+      }
+    }
+
+    for (const key of orderedTileKeys) {
+      if (sampleTiles.length >= maxSampleTiles) {
+        break;
+      }
+      const parsed = parseWorldTileKey(key);
+      if (!parsed) {
+        continue;
+      }
+      const sourceFlags = tileKnowledgeState.tileSources.get(key) || null;
+      const identified = tileKnowledgeState.identifiedTiles.has(key);
+      const classified = runtime.classifyAreaAtWorld(parsed.x + 0.5, parsed.y + 0.5);
+      sampleTiles.push({
+        x: parsed.x,
+        y: parsed.y,
+        key,
+        identified,
+        sourceLos: sourceFlags?.los === true,
+        sourceRoomReveal: sourceFlags?.roomReveal === true,
+        inRoom: classified?.inRoom === true,
+        inCorridor: classified?.inCorridor === true,
+        doorwayTreatedAsRoom: classified?.doorwayTreatedAsRoom === true,
+        classification: classified?.classification || "other",
+      });
+    }
+
+    const lastLosTiles = [];
+    for (const key of tileKnowledgeState.lastLosTileKeys) {
+      const parsed = parseWorldTileKey(key);
+      if (parsed) {
+        lastLosTiles.push(parsed);
+      }
+    }
+    const lastRoomRevealTiles = [];
+    for (const key of tileKnowledgeState.lastRoomRevealTileKeys) {
+      const parsed = parseWorldTileKey(key);
+      if (parsed) {
+        lastRoomRevealTiles.push(parsed);
+      }
+    }
+
+    return {
+      guestId,
+      centerTile: {
+        x: centerTileX,
+        y: centerTileY,
+      },
+      sampleRadiusTiles,
+      identifiedTileCount: tileKnowledgeState.identifiedTiles.size,
+      knownRoomCount: tileKnowledgeState.knownRoomKeys.size,
+      knownRoomKeys: [...tileKnowledgeState.knownRoomKeys],
+      lastUpdatedAtMs: tileKnowledgeState.lastUpdatedAtMs,
+      lastLosTiles,
+      lastRoomRevealTiles,
+      sampleTiles,
+    };
+  }
+
+  function createInitialGuestMentalState(humanId) {
+    const phaseRatio = (getDeterministicIdHash(humanId) % 997) / 997;
+    return {
+      runtime: createGuestMentalRuntimeState(resolvedGuestMentalModelConfig),
+      lastInputDebug: null,
+      evaluationCooldownSeconds:
+        guestMentalEvaluationIntervalSeconds === Infinity
+          ? Infinity
+          : guestMentalEvaluationIntervalSeconds * phaseRatio,
+    };
+  }
+
+  function getGuestMentalState(humanId) {
+    let state = guestMentalStateById.get(humanId);
+    if (!state) {
+      state = createInitialGuestMentalState(humanId);
+      guestMentalStateById.set(humanId, state);
+    }
+    return state;
+  }
+
+  function buildGuestMentalInputValues(guest, controller, perceptionState) {
+    if (!guestMentalInputAdapter) {
+      return {
+        inputValues: {},
+        debug: null,
+      };
+    }
+    return guestMentalInputAdapter.buildInputs({
+      config: resolvedGuestMentalModelConfig,
+      guestController: controller,
+      guestId: guest?.id ?? null,
+      guestPerceptionState: perceptionState || null,
+    });
+  }
+
+  function runGuestMentalModelStep(dtSeconds, { recordCycle = true } = {}) {
+    if (!guestMentalModelEnabled) {
+      if (recordCycle) {
+        lastGuestMentalCycle = {
+          enabled: false,
+        };
+      }
+      return false;
+    }
+
+    const guests = getHumanEntries({ livingOnly: true }).filter(
+      (entry) => entry.role === ROLE_GUEST
+    );
+    const activeGuestIds = new Set(guests.map((entry) => entry.id));
+    let changed = false;
+    let evaluatedGuestCount = 0;
+    let dominantChangedCount = 0;
+    const dominantStateCounts = {};
+    let inRoomGuestCount = 0;
+    let inCorridorGuestCount = 0;
+    let doorwayAsRoomGuestCount = 0;
+    let unknownAreaGuestCount = 0;
+    let holdLockedCount = 0;
+    let preemptedCount = 0;
+    let fallbackAppliedCount = 0;
+    let fallbackRetryingCount = 0;
+    const objectiveStateCounts = {
+      wander: 0,
+      shelter: 0,
+      danger: 0,
+      thirst: 0,
+      hunger: 0,
+      none: 0,
+    };
+    for (const stateId of resolvedGuestMentalModelConfig.states) {
+      dominantStateCounts[stateId] = 0;
+    }
+
+    for (const [humanId] of guestMentalStateById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestMentalStateById.delete(humanId);
+      }
+    }
+    for (const [humanId] of guestTileKnowledgeById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestTileKnowledgeById.delete(humanId);
+      }
+    }
+    for (const [humanId] of guestMentalPathFeedbackById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestMentalPathFeedbackById.delete(humanId);
+      }
+    }
+
+    const dt = Math.max(0, Number(dtSeconds) || 0);
+    for (const guest of guests) {
+      const mentalState = getGuestMentalState(guest.id);
+      mentalState.evaluationCooldownSeconds = Math.max(
+        0,
+        Number(mentalState.evaluationCooldownSeconds) - dt
+      );
+
+      const shouldEvaluate =
+        mentalState.runtime.evaluationCount <= 0 ||
+        mentalState.evaluationCooldownSeconds <= 0;
+      if (shouldEvaluate) {
+        const previousDominantState = mentalState.runtime.lastDominantState ?? null;
+        const perceptionState = guestPerceptionById.get(guest.id) || null;
+        const inputSnapshot = buildGuestMentalInputValues(
+          guest,
+          guest.controller,
+          perceptionState
+        );
+        const pathFeedback =
+          guestMentalPathFeedbackById.get(guest.id) || {
+            status: "none",
+            reason: null,
+          };
+        guestMentalPathFeedbackById.delete(guest.id);
+        mentalState.lastInputDebug = inputSnapshot.debug || null;
+        const evaluation = evaluateGuestMentalModel({
+          config: resolvedGuestMentalModelConfig,
+          runtimeState: mentalState.runtime,
+          inputValues: inputSnapshot.inputValues,
+          dtSeconds: dt,
+          pathFeedback,
+        });
+        evaluatedGuestCount += 1;
+        if (previousDominantState !== evaluation.dominantState) {
+          dominantChangedCount += 1;
+          changed = true;
+        }
+        if (evaluation.holdLocked === true) {
+          holdLockedCount += 1;
+        }
+        if (evaluation.arbitrationReasonCode === "preempted") {
+          preemptedCount += 1;
+        }
+        if (evaluation.fallback?.applied === true) {
+          fallbackAppliedCount += 1;
+        }
+        if (evaluation.fallback?.active === true) {
+          fallbackRetryingCount += 1;
+        }
+        mentalState.evaluationCooldownSeconds =
+          guestMentalEvaluationIntervalSeconds === Infinity
+            ? Infinity
+            : guestMentalEvaluationIntervalSeconds;
+      }
+
+      const areaDebug = mentalState.lastInputDebug;
+      if (areaDebug?.inRoom === true) {
+        inRoomGuestCount += 1;
+      } else if (areaDebug?.inCorridor === true) {
+        inCorridorGuestCount += 1;
+      } else {
+        unknownAreaGuestCount += 1;
+      }
+      if (areaDebug?.doorwayTreatedAsRoom === true) {
+        doorwayAsRoomGuestCount += 1;
+      }
+
+      const dominantState = mentalState.runtime.lastDominantState;
+      if (
+        typeof dominantState === "string" &&
+        Object.prototype.hasOwnProperty.call(dominantStateCounts, dominantState)
+      ) {
+        dominantStateCounts[dominantState] += 1;
+      }
+      const objectiveState =
+        mentalState.runtime.lastEvaluationResult?.objectiveState ?? null;
+      if (
+        typeof objectiveState === "string" &&
+        Object.prototype.hasOwnProperty.call(objectiveStateCounts, objectiveState)
+      ) {
+        objectiveStateCounts[objectiveState] += 1;
+      } else {
+        objectiveStateCounts.none += 1;
+      }
+    }
+
+    if (recordCycle) {
+      lastGuestMentalCycle = {
+        enabled: true,
+        guestCount: guests.length,
+        evaluatedGuestCount,
+        dominantChangedCount,
+        dominantStateCounts,
+        inRoomGuestCount,
+        inCorridorGuestCount,
+        doorwayAsRoomGuestCount,
+        unknownAreaGuestCount,
+        holdLockedCount,
+        preemptedCount,
+        fallbackAppliedCount,
+        fallbackRetryingCount,
+        objectiveStateCounts,
+        evaluationCadenceHz: guestMentalEvaluationCadenceHz,
+        evaluationIntervalSeconds:
+          guestMentalEvaluationIntervalSeconds === Infinity
+            ? null
+            : guestMentalEvaluationIntervalSeconds,
+      };
+    }
+
+    return changed;
   }
 
   function normalizeWaypointSelection(selection) {
@@ -1132,6 +1797,9 @@ export function createHumanManager({
     let changed = false;
     let fleeGuestCount = 0;
     let wanderGuestCount = 0;
+    let shelterIntentGuestCount = 0;
+    let dangerIntentGuestCount = 0;
+    let wanderIntentGuestCount = 0;
     let replansAttempted = 0;
     let replansSucceeded = 0;
     let failedPlanCount = 0;
@@ -1139,6 +1807,11 @@ export function createHumanManager({
     for (const [humanId] of guestBehaviorById.entries()) {
       if (!activeGuestIds.has(humanId)) {
         guestBehaviorById.delete(humanId);
+      }
+    }
+    for (const [humanId] of guestTileKnowledgeById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestTileKnowledgeById.delete(humanId);
       }
     }
     for (const [humanId] of guestWaypointSelectionDebugById.entries()) {
@@ -1151,10 +1824,19 @@ export function createHumanManager({
         guestWanderStateById.delete(humanId);
       }
     }
+    for (const [humanId] of guestMentalPathFeedbackById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestMentalPathFeedbackById.delete(humanId);
+      }
+    }
 
     const dt = Math.max(0, Number(dtSeconds) || 0);
     for (const guest of guests) {
       const controller = guest.controller;
+      let mentalPathFeedback = {
+        status: "none",
+        reason: null,
+      };
       if (
         typeof controller?.getCurrentWorldPosition !== "function" ||
         typeof controller?.getHeadingRadians !== "function" ||
@@ -1162,6 +1844,7 @@ export function createHumanManager({
         typeof controller?.setWorldPath !== "function" ||
         typeof controller?.hasWaypoint !== "function"
       ) {
+        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
         continue;
       }
       const wanderState = getGuestWanderState(guest.id);
@@ -1175,8 +1858,37 @@ export function createHumanManager({
         perception?.detected === true &&
         Number.isFinite(perception?.targetWorld?.x) &&
         Number.isFinite(perception?.targetWorld?.y);
-      const desiredMode = hasThreat ? "flee" : "wander";
+      const mentalEvaluation =
+        guestMentalStateById.get(guest.id)?.runtime?.lastEvaluationResult || null;
+      const objectiveStateRaw =
+        mentalEvaluation?.objectiveState ||
+        mentalEvaluation?.dominantState ||
+        "wander";
+      const objectiveState =
+        objectiveStateRaw === "danger" ||
+        objectiveStateRaw === "shelter" ||
+        objectiveStateRaw === "wander"
+          ? objectiveStateRaw
+          : "wander";
+      if (objectiveState === "danger") {
+        dangerIntentGuestCount += 1;
+      } else if (objectiveState === "shelter") {
+        shelterIntentGuestCount += 1;
+      } else {
+        wanderIntentGuestCount += 1;
+      }
+      const desiredMode = objectiveState === "danger" ? "flee" : "wander";
       const behavior = getGuestBehaviorState(guest.id);
+      behavior.objectiveState = objectiveState;
+      behavior.objectiveDispatchMode =
+        objectiveState === "danger"
+          ? "danger_flee"
+          : objectiveState === "shelter"
+            ? "shelter_proxy_wander"
+            : "wander";
+      behavior.objectiveReasonCode = mentalEvaluation?.arbitrationReasonCode || null;
+      behavior.objectiveFailureReason = null;
+      behavior.objectiveTargetWorld = null;
       behavior.replanCooldownSeconds = Math.max(0, behavior.replanCooldownSeconds - dt);
       const blockedEvent =
         typeof controller.consumePathBlockedEvent === "function"
@@ -1217,13 +1929,31 @@ export function createHumanManager({
         (desiredMode === "flee" && !shouldReplanForFlee) ||
         (desiredMode === "wander" && !shouldReplanForWander)
       ) {
+        behavior.objectivePathStatus = hasActivePath ? "following_path" : "idle";
+        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
         continue;
       }
 
       replansAttempted += 1;
+      if (desiredMode === "flee" && !hasThreat) {
+        behavior.lastPlanReason = "danger_no_target";
+        behavior.objectivePathStatus = "retrying";
+        behavior.objectiveFailureReason = behavior.lastPlanReason;
+        mentalPathFeedback = {
+          status: "failure",
+          reason: behavior.lastPlanReason,
+        };
+        failedPlanCount += 1;
+        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
+        continue;
+      }
       if (desiredMode === "flee" && hasThreat) {
         const guestWorld = controller.getCurrentWorldPosition();
         const threatWorld = perception.targetWorld;
+        behavior.objectiveTargetWorld = {
+          x: threatWorld.x,
+          y: threatWorld.y,
+        };
         const guestHeadingRadians = controller.getHeadingRadians();
         const fleeHeadingRadians = normalizeAngleRadians(
           Math.atan2(
@@ -1267,6 +1997,11 @@ export function createHumanManager({
             }
             behavior.replanCooldownSeconds = guestFleeReplanSeconds;
             behavior.lastPlanReason = debugSelection?.reason || "planned";
+            behavior.objectivePathStatus = "valid";
+            mentalPathFeedback = {
+              status: "success",
+              reason: behavior.lastPlanReason,
+            };
             replansSucceeded += 1;
             changed = true;
           } else {
@@ -1285,6 +2020,12 @@ export function createHumanManager({
             );
             behavior.replanCooldownSeconds = Math.min(guestFleeReplanSeconds, 0.18);
             behavior.lastPlanReason = assignment.reason || "rejected_by_controller";
+            behavior.objectivePathStatus = "retrying";
+            behavior.objectiveFailureReason = behavior.lastPlanReason;
+            mentalPathFeedback = {
+              status: "failure",
+              reason: behavior.lastPlanReason,
+            };
             failedPlanCount += 1;
           }
         } else {
@@ -1293,14 +2034,24 @@ export function createHumanManager({
           });
           behavior.replanCooldownSeconds = Math.min(guestFleeReplanSeconds, 0.18);
           behavior.lastPlanReason = debugSelection?.reason || "no_candidate_found";
+          behavior.objectivePathStatus = "retrying";
+          behavior.objectiveFailureReason = behavior.lastPlanReason;
+          mentalPathFeedback = {
+            status: "failure",
+            reason: behavior.lastPlanReason,
+          };
           failedPlanCount += 1;
         }
+        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
         continue;
       }
 
       if (wanderState.repickCooldownRemainingSeconds > 0) {
         recordGuestRepickCooldownDebug(guest.id, wanderState);
         behavior.lastPlanReason = "repick_cooldown";
+        behavior.objectivePathStatus = "retrying";
+        behavior.objectiveFailureReason = behavior.lastPlanReason;
+        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
         continue;
       }
 
@@ -1312,6 +2063,10 @@ export function createHumanManager({
       const debugSelection = normalizedSelection.debug;
       const waypoint = normalizedSelection.waypoint;
       if (waypoint) {
+        behavior.objectiveTargetWorld = {
+          x: waypoint.x,
+          y: waypoint.y,
+        };
         const assignment = assignGuestRasterPath(controller, waypoint, {
           occupiedSubTileKeys,
         });
@@ -1332,6 +2087,11 @@ export function createHumanManager({
             });
           }
           behavior.lastPlanReason = debugSelection?.reason || "planned";
+          behavior.objectivePathStatus = "valid";
+          mentalPathFeedback = {
+            status: "success",
+            reason: behavior.lastPlanReason,
+          };
           replansSucceeded += 1;
           changed = true;
         } else {
@@ -1349,6 +2109,12 @@ export function createHumanManager({
             }
           );
           behavior.lastPlanReason = assignment.reason || "rejected_by_controller";
+          behavior.objectivePathStatus = "retrying";
+          behavior.objectiveFailureReason = behavior.lastPlanReason;
+          mentalPathFeedback = {
+            status: "failure",
+            reason: behavior.lastPlanReason,
+          };
           failedPlanCount += 1;
         }
       } else {
@@ -1356,8 +2122,15 @@ export function createHumanManager({
           ...debugSelection,
         });
         behavior.lastPlanReason = debugSelection?.reason || "no_candidate_found";
+        behavior.objectivePathStatus = "retrying";
+        behavior.objectiveFailureReason = behavior.lastPlanReason;
+        mentalPathFeedback = {
+          status: "failure",
+          reason: behavior.lastPlanReason,
+        };
         failedPlanCount += 1;
       }
+      guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
     }
 
     if (recordCycle) {
@@ -1366,6 +2139,9 @@ export function createHumanManager({
         guestCount: guests.length,
         fleeGuestCount,
         wanderGuestCount,
+        shelterIntentGuestCount,
+        dangerIntentGuestCount,
+        wanderIntentGuestCount,
         replansAttempted,
         replansSucceeded,
         failedPlanCount,
@@ -1459,6 +2235,9 @@ export function createHumanManager({
     if (runGuestBehaviorStep(dtSeconds, { recordCycle: true })) {
       changed = true;
     }
+    if (runGuestMentalModelStep(dtSeconds, { recordCycle: true })) {
+      changed = true;
+    }
     for (const record of humansById.values()) {
       if (record.controller.update(dtSeconds)) {
         changed = true;
@@ -1489,6 +2268,230 @@ export function createHumanManager({
     return count;
   }
 
+  function cloneGuestMentalEvaluation(evaluation) {
+    if (!evaluation) {
+      return null;
+    }
+    return {
+      inputValues: { ...(evaluation.inputValues || {}) },
+      rawScoresByState: { ...(evaluation.rawScoresByState || {}) },
+      scoresByState: { ...(evaluation.scoresByState || {}) },
+      enabledStateIds: Array.isArray(evaluation.enabledStateIds)
+        ? [...evaluation.enabledStateIds]
+        : [],
+      disabledStateIds: Array.isArray(evaluation.disabledStateIds)
+        ? [...evaluation.disabledStateIds]
+        : [],
+      dominantState: evaluation.dominantState ?? null,
+      dominantScore: Number.isFinite(evaluation.dominantScore)
+        ? evaluation.dominantScore
+        : null,
+      previousDominantState: evaluation.previousDominantState ?? null,
+      dominantStateChanged: evaluation.dominantStateChanged === true,
+      dominantStateHoldSeconds: Number.isFinite(evaluation.dominantStateHoldSeconds)
+        ? evaluation.dominantStateHoldSeconds
+        : 0,
+      objectiveState: evaluation.objectiveState ?? null,
+      previousObjectiveState: evaluation.previousObjectiveState ?? null,
+      objectiveChanged: evaluation.objectiveChanged === true,
+      objectiveTransitionReasonCode: evaluation.objectiveTransitionReasonCode || "none",
+      objectiveHoldSeconds: Number.isFinite(evaluation.objectiveHoldSeconds)
+        ? evaluation.objectiveHoldSeconds
+        : 0,
+      arbitrationReasonCode: evaluation.arbitrationReasonCode || null,
+      holdLocked: evaluation.holdLocked === true,
+      minimumHoldSeconds: Number.isFinite(evaluation.minimumHoldSeconds)
+        ? evaluation.minimumHoldSeconds
+        : 0,
+      preemptionGate: evaluation.preemptionGate
+        ? {
+            candidateIsDanger: evaluation.preemptionGate.candidateIsDanger === true,
+            threshold: Number.isFinite(evaluation.preemptionGate.threshold)
+              ? evaluation.preemptionGate.threshold
+              : 0,
+            margin: Number.isFinite(evaluation.preemptionGate.margin)
+              ? evaluation.preemptionGate.margin
+              : 0,
+            dangerScore: Number.isFinite(evaluation.preemptionGate.dangerScore)
+              ? evaluation.preemptionGate.dangerScore
+              : 0,
+            currentScore: Number.isFinite(evaluation.preemptionGate.currentScore)
+              ? evaluation.preemptionGate.currentScore
+              : 0,
+            marginValue: Number.isFinite(evaluation.preemptionGate.marginValue)
+              ? evaluation.preemptionGate.marginValue
+              : 0,
+            thresholdMet: evaluation.preemptionGate.thresholdMet === true,
+            marginMet: evaluation.preemptionGate.marginMet === true,
+            allowed: evaluation.preemptionGate.allowed === true,
+          }
+        : null,
+      fallback: evaluation.fallback
+        ? {
+            active: evaluation.fallback.active === true,
+            applied: evaluation.fallback.applied === true,
+            fallbackObjectiveState: evaluation.fallback.fallbackObjectiveState ?? null,
+            pendingRetryObjectiveState:
+              evaluation.fallback.pendingRetryObjectiveState ?? null,
+            retryRemainingSeconds: Number.isFinite(
+              evaluation.fallback.retryRemainingSeconds
+            )
+              ? evaluation.fallback.retryRemainingSeconds
+              : 0,
+            retryCount: Number.isFinite(evaluation.fallback.retryCount)
+              ? evaluation.fallback.retryCount
+              : 0,
+            retryDelaySeconds: Number.isFinite(evaluation.fallback.retryDelaySeconds)
+              ? evaluation.fallback.retryDelaySeconds
+              : null,
+            lastFailureReason: evaluation.fallback.lastFailureReason || null,
+          }
+        : null,
+      pathFeedback: evaluation.pathFeedback
+        ? {
+            status: evaluation.pathFeedback.status || "none",
+            reason: evaluation.pathFeedback.reason || null,
+          }
+        : {
+            status: "none",
+            reason: null,
+          },
+      dominantContributionTerms: Array.isArray(evaluation.dominantContributionTerms)
+        ? evaluation.dominantContributionTerms.map((term) => ({
+            termType: term?.termType === "bias" ? "bias" : "input",
+            inputId: term?.inputId ?? null,
+            weight: Number.isFinite(term?.weight) ? term.weight : null,
+            inputValue: Number.isFinite(term?.inputValue) ? term.inputValue : null,
+            contribution: Number.isFinite(term?.contribution) ? term.contribution : 0,
+            absContribution: Number.isFinite(term?.absContribution)
+              ? term.absContribution
+              : Math.abs(Number(term?.contribution) || 0),
+          }))
+        : [],
+      dominantTopContributions: Array.isArray(evaluation.dominantTopContributions)
+        ? evaluation.dominantTopContributions.map((term) => ({
+            termType: term?.termType === "bias" ? "bias" : "input",
+            inputId: term?.inputId ?? null,
+            weight: Number.isFinite(term?.weight) ? term.weight : null,
+            inputValue: Number.isFinite(term?.inputValue) ? term.inputValue : null,
+            contribution: Number.isFinite(term?.contribution) ? term.contribution : 0,
+            absContribution: Number.isFinite(term?.absContribution)
+              ? term.absContribution
+              : Math.abs(Number(term?.contribution) || 0),
+          }))
+        : [],
+      evaluationCount: Number.isFinite(evaluation.evaluationCount)
+        ? evaluation.evaluationCount
+        : 0,
+    };
+  }
+
+  function cloneGuestMentalInputDebug(inputDebug) {
+    if (!inputDebug) {
+      return null;
+    }
+    return {
+      hpNormalized: Number.isFinite(inputDebug.hpNormalized)
+        ? inputDebug.hpNormalized
+        : 0,
+      inRoom: inputDebug.inRoom === true,
+      inCorridor: inputDebug.inCorridor === true,
+      doorwayTreatedAsRoom: inputDebug.doorwayTreatedAsRoom === true,
+      isDoorwayTile: inputDebug.isDoorwayTile === true,
+      areaClassification: inputDebug.areaClassification || "other",
+      areaTile: Number.isFinite(inputDebug.areaTile) ? inputDebug.areaTile : null,
+      areaTileX: Number.isFinite(inputDebug.areaTileX) ? inputDebug.areaTileX : null,
+      areaTileY: Number.isFinite(inputDebug.areaTileY) ? inputDebug.areaTileY : null,
+      areaRoomIndex: Number.isFinite(inputDebug.areaRoomIndex)
+        ? inputDebug.areaRoomIndex
+        : null,
+      areaChunkX: Number.isFinite(inputDebug.areaChunkX) ? inputDebug.areaChunkX : null,
+      areaChunkY: Number.isFinite(inputDebug.areaChunkY) ? inputDebug.areaChunkY : null,
+      identifiedByMemory: inputDebug.identifiedByMemory === true,
+      identifiedSourceLos: inputDebug.identifiedSourceLos === true,
+      identifiedSourceRoomReveal: inputDebug.identifiedSourceRoomReveal === true,
+      inactiveInputs: {
+        danger_distance_signal:
+          inputDebug?.inactiveInputs?.danger_distance_signal === true,
+        thirst_signal: inputDebug?.inactiveInputs?.thirst_signal === true,
+        hunger_signal: inputDebug?.inactiveInputs?.hunger_signal === true,
+      },
+    };
+  }
+
+  function cloneGuestMentalStateWeights(stateWeights) {
+    if (!stateWeights || typeof stateWeights !== "object") {
+      return {};
+    }
+    const clone = {};
+    for (const [stateId, inputWeights] of Object.entries(stateWeights)) {
+      if (!inputWeights || typeof inputWeights !== "object") {
+        clone[stateId] = {};
+        continue;
+      }
+      const row = {};
+      for (const [inputId, weight] of Object.entries(inputWeights)) {
+        row[inputId] = Number.isFinite(weight) ? Number(weight) : 0;
+      }
+      clone[stateId] = row;
+    }
+    return clone;
+  }
+
+  function cloneGuestMentalStateBias(stateBias) {
+    if (!stateBias || typeof stateBias !== "object") {
+      return {};
+    }
+    const clone = {};
+    for (const [stateId, bias] of Object.entries(stateBias)) {
+      clone[stateId] = Number.isFinite(bias) ? Number(bias) : 0;
+    }
+    return clone;
+  }
+
+  function buildGuestMentalDebugSnapshot(humanId) {
+    if (!guestMentalModelEnabled) {
+      return null;
+    }
+    const state = guestMentalStateById.get(humanId);
+    if (!state || !state.runtime) {
+      return null;
+    }
+    return {
+      dominantState: state.runtime.lastDominantState ?? null,
+      dominantStateHoldSeconds: Number.isFinite(state.runtime.dominantStateHoldSeconds)
+        ? state.runtime.dominantStateHoldSeconds
+        : 0,
+      objectiveState: state.runtime.lastObjectiveState ?? null,
+      objectiveHoldSeconds: Number.isFinite(state.runtime.objectiveHoldSeconds)
+        ? state.runtime.objectiveHoldSeconds
+        : 0,
+      arbitrationReasonCode: state.runtime.lastArbitrationReasonCode || null,
+      preemptionGate: state.runtime.lastPreemptionGate
+        ? { ...state.runtime.lastPreemptionGate }
+        : null,
+      retryRemainingSeconds: Number.isFinite(state.runtime.retryRemainingSeconds)
+        ? state.runtime.retryRemainingSeconds
+        : 0,
+      retryDelaySeconds: Number.isFinite(state.runtime.retryDelaySeconds)
+        ? state.runtime.retryDelaySeconds
+        : 0,
+      pendingRetryObjectiveState: state.runtime.pendingRetryObjectiveState ?? null,
+      retryCount: Number.isFinite(state.runtime.retryCount)
+        ? state.runtime.retryCount
+        : 0,
+      lastObjectiveFailureReason: state.runtime.lastObjectiveFailureReason ?? null,
+      evaluationCount: Number.isFinite(state.runtime.evaluationCount)
+        ? state.runtime.evaluationCount
+        : 0,
+      evaluationCooldownSeconds: Number.isFinite(state.evaluationCooldownSeconds)
+        ? state.evaluationCooldownSeconds
+        : 0,
+      inputDebug: cloneGuestMentalInputDebug(state.lastInputDebug),
+      lastEvaluation: cloneGuestMentalEvaluation(state.runtime.lastEvaluationResult),
+    };
+  }
+
   function getDebugState() {
     const humans = [];
     for (const record of humansById.values()) {
@@ -1506,12 +2509,48 @@ export function createHumanManager({
           ? guestWanderStateById.get(record.id) ||
             createInitialGuestWanderState(record.id)
           : null;
+      const guestBehaviorState =
+        role === ROLE_GUEST ? guestBehaviorById.get(record.id) || null : null;
       const mergedDebug =
         role === ROLE_GUEST
           ? {
               ...(controllerDebug || {}),
               waypointSelection:
                 guestWaypointSelectionDebugById.get(record.id) || null,
+              objectiveIntent: guestBehaviorState
+                ? {
+                    objectiveState: guestBehaviorState.objectiveState || "wander",
+                    objectiveDispatchMode:
+                      guestBehaviorState.objectiveDispatchMode || "wander",
+                    objectiveReasonCode: guestBehaviorState.objectiveReasonCode || null,
+                    objectivePathStatus:
+                      guestBehaviorState.objectivePathStatus || "idle",
+                    objectiveFailureReason:
+                      guestBehaviorState.objectiveFailureReason || null,
+                    objectiveTargetWorld:
+                      Number.isFinite(guestBehaviorState?.objectiveTargetWorld?.x) &&
+                      Number.isFinite(guestBehaviorState?.objectiveTargetWorld?.y)
+                        ? {
+                            x: guestBehaviorState.objectiveTargetWorld.x,
+                            y: guestBehaviorState.objectiveTargetWorld.y,
+                          }
+                        : null,
+                  }
+                : null,
+              mentalModel: buildGuestMentalDebugSnapshot(record.id),
+              tileKnowledge: (() => {
+                const state = guestTileKnowledgeById.get(record.id);
+                if (!state) {
+                  return null;
+                }
+                return {
+                  identifiedTileCount: state.identifiedTiles.size,
+                  knownRoomCount: state.knownRoomKeys.size,
+                  lastLosTileCount: state.lastLosTileKeys.size,
+                  lastRoomRevealTileCount: state.lastRoomRevealTileKeys.size,
+                  lastUpdatedAtMs: state.lastUpdatedAtMs,
+                };
+              })(),
               wanderRecovery: {
                 noCandidateStreak: guestWanderState.noCandidateStreak,
                 recoveryRemainingSeconds:
@@ -1542,6 +2581,53 @@ export function createHumanManager({
       totalSurvivorCount: getSurvivorCount(),
       guestCount: getGuestCount({ livingOnly: true }),
       totalGuestCount: getGuestCount(),
+      guestMentalModel: resolvedGuestMentalModelConfig
+        ? {
+            enabled: true,
+            brainConfigVersion: resolvedGuestMentalModelConfig.brainConfigVersion,
+            states: [...resolvedGuestMentalModelConfig.states],
+            inputs: [...resolvedGuestMentalModelConfig.inputs],
+            stateWeights: cloneGuestMentalStateWeights(
+              resolvedGuestMentalModelConfig.stateWeights
+            ),
+            stateBias: cloneGuestMentalStateBias(
+              resolvedGuestMentalModelConfig.stateBias
+            ),
+            disabledStates: [...resolvedGuestMentalModelConfig.disabledStates],
+            tieBreakOrder: [...resolvedGuestMentalModelConfig.tieBreakOrder],
+            minimumHoldSeconds: resolvedGuestMentalModelConfig.minimumHoldSeconds,
+            dangerPreemption: { ...resolvedGuestMentalModelConfig.dangerPreemption },
+            objectiveFailureFallback: {
+              ...resolvedGuestMentalModelConfig.objectiveFailureFallback,
+            },
+            evaluationCadenceHz: resolvedGuestMentalModelConfig.evaluationCadenceHz,
+            debugPanelRefreshHz: resolvedGuestMentalModelConfig.debugPanelRefreshHz,
+            lastCycle: lastGuestMentalCycle ? { ...lastGuestMentalCycle } : null,
+            byGuest: Array.from(guestMentalStateById.entries()).map(([id, state]) => ({
+              id,
+              dominantState: state?.runtime?.lastDominantState ?? null,
+              dominantStateHoldSeconds: Number.isFinite(
+                state?.runtime?.dominantStateHoldSeconds
+              )
+                ? state.runtime.dominantStateHoldSeconds
+                : 0,
+              evaluationCount: Number.isFinite(state?.runtime?.evaluationCount)
+                ? state.runtime.evaluationCount
+                : 0,
+              evaluationCooldownSeconds: Number.isFinite(
+                state?.evaluationCooldownSeconds
+              )
+                ? state.evaluationCooldownSeconds
+                : 0,
+              inputDebug: cloneGuestMentalInputDebug(state?.lastInputDebug),
+              lastEvaluation: cloneGuestMentalEvaluation(
+                state?.runtime?.lastEvaluationResult
+              ),
+            })),
+          }
+        : {
+            enabled: false,
+          },
       naturalGuestPopulation: {
         enabled: naturalGuestEnabled,
         targetGuestCount: naturalGuestTargetCount,
@@ -1565,6 +2651,9 @@ export function createHumanManager({
           distanceToTarget: Number.isFinite(state.distanceToTarget)
             ? state.distanceToTarget
             : null,
+          visibleTileCount: Number.isFinite(state.visibleTileCount)
+            ? Math.max(0, Math.floor(state.visibleTileCount))
+            : 0,
         })),
       },
       guestBehavior: {
@@ -1573,6 +2662,19 @@ export function createHumanManager({
         byGuest: Array.from(guestBehaviorById.entries()).map(([id, state]) => ({
           id,
           mode: state.mode || "wander",
+          objectiveState: state.objectiveState || "wander",
+          objectiveDispatchMode: state.objectiveDispatchMode || "wander",
+          objectiveReasonCode: state.objectiveReasonCode || null,
+          objectivePathStatus: state.objectivePathStatus || "idle",
+          objectiveFailureReason: state.objectiveFailureReason || null,
+          objectiveTargetWorld:
+            Number.isFinite(state?.objectiveTargetWorld?.x) &&
+            Number.isFinite(state?.objectiveTargetWorld?.y)
+              ? {
+                  x: state.objectiveTargetWorld.x,
+                  y: state.objectiveTargetWorld.y,
+                }
+              : null,
           replanCooldownSeconds: Number.isFinite(state.replanCooldownSeconds)
             ? state.replanCooldownSeconds
             : 0,
@@ -1607,6 +2709,13 @@ export function createHumanManager({
     };
   }
 
+  function getGuestTileKnowledgeDebug(guestId, options = {}) {
+    if (guestId == null) {
+      return null;
+    }
+    return buildGuestTileKnowledgeDebug(guestId, options);
+  }
+
   function setDebugEnabled(enabled) {
     debugEnabled = Boolean(enabled);
     if (!debugEnabled) {
@@ -1625,8 +2734,11 @@ export function createHumanManager({
     humansById.clear();
     guestPerceptionById.clear();
     guestBehaviorById.clear();
+    guestTileKnowledgeById.clear();
+    guestMentalPathFeedbackById.clear();
     guestWaypointSelectionDebugById.clear();
     guestWanderStateById.clear();
+    guestMentalStateById.clear();
   }
 
   spawnPrimarySurvivor();
@@ -1640,6 +2752,7 @@ export function createHumanManager({
     setDebugEnabled,
     isDebugEnabled,
     getDebugState,
+    getGuestTileKnowledgeDebug,
     update,
     syncToView,
     destroy,

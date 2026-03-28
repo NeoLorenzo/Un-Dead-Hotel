@@ -14,6 +14,7 @@ import { createFirstContactDiagnosticsPanel } from "./debug/firstContactDiagnost
 import { createRuntimeDebugController } from "./debug/runtimeDebugController.js";
 import { createZombieDebugOverlay } from "./debug/zombieDebugOverlay.js";
 import { createHumanCommandController } from "./human/humanCommandController.js";
+import { createGuestMentalModelConfig } from "./human/guestMentalModel.js";
 import { createHumanManager } from "./human/humanManager.js";
 import { createHumanSelectionController } from "./human/humanSelectionController.js";
 import { createAgentHpBarOverlay } from "./ui/agentHpBarOverlay.js";
@@ -101,6 +102,9 @@ const mountElement = document.getElementById("game-root");
 const runtimeOverlayElement = document.getElementById("runtime-overlay");
 const diagnosticsTextToggleElement = document.getElementById("toggle-diagnostics-text");
 const visionDebugToggleElement = document.getElementById("toggle-debug-vision");
+const trackInspectedGuestToggleElement = document.getElementById(
+  "toggle-track-inspected-guest"
+);
 
 if (!mountElement) {
   throw new Error("Game runtime mount element not found.");
@@ -111,6 +115,19 @@ function setRuntimeOverlayVisible(visible) {
     return;
   }
   runtimeOverlayElement.hidden = !visible;
+}
+
+function resolveRuntimeOverlayBottomInsetPx() {
+  if (!runtimeOverlayElement || runtimeOverlayElement.hidden) {
+    return 0;
+  }
+  const overlayRect = runtimeOverlayElement.getBoundingClientRect();
+  if (overlayRect.width <= 0 || overlayRect.height <= 0) {
+    return 0;
+  }
+  const mountRect = mountElement?.getBoundingClientRect?.();
+  const mountTop = Number.isFinite(mountRect?.top) ? mountRect.top : 0;
+  return Math.max(0, Math.round(overlayRect.bottom - mountTop + 8));
 }
 
 setRuntimeOverlayVisible(false);
@@ -366,8 +383,9 @@ function createRuntimeScene(Phaser) {
       this.zombieManagerDebugBridge = null;
       this.debugOverlayEnabled = false;
       this.simulationPaused = false;
-      this.diagnosticsTextVisible = true;
+      this.diagnosticsTextVisible = false;
       this.debugVisionEnabled = true;
+      this.trackInspectedGuestEnabled = false;
       this.handlePointerDown = null;
       this.handlePointerMove = null;
       this.handlePointerUp = null;
@@ -375,6 +393,7 @@ function createRuntimeScene(Phaser) {
       this.handlePauseKeyDown = null;
       this.handleDiagnosticsTextToggleClick = null;
       this.handleVisionDebugToggleClick = null;
+      this.handleTrackInspectedGuestToggleClick = null;
     }
 
     applyDebugUiSettings() {
@@ -428,6 +447,23 @@ function createRuntimeScene(Phaser) {
         visionDebugToggleElement.setAttribute(
           "aria-pressed",
           this.debugVisionEnabled ? "true" : "false"
+        );
+      }
+
+      if (trackInspectedGuestToggleElement) {
+        const trackingSupported =
+          this.humanDebugOverlay &&
+          typeof this.humanDebugOverlay.getInspectedGuestWorld === "function";
+        if (!trackingSupported && this.trackInspectedGuestEnabled) {
+          this.trackInspectedGuestEnabled = false;
+        }
+        trackInspectedGuestToggleElement.disabled = !trackingSupported;
+        trackInspectedGuestToggleElement.textContent = trackingSupported
+          ? `Track Inspected Guest: ${this.trackInspectedGuestEnabled ? "On" : "Off"}`
+          : "Track Inspected Guest: Unavailable";
+        trackInspectedGuestToggleElement.setAttribute(
+          "aria-pressed",
+          this.trackInspectedGuestEnabled ? "true" : "false"
         );
       }
     }
@@ -525,6 +561,10 @@ function createRuntimeScene(Phaser) {
                 wanderReplanSeconds: 1.1,
               }
             : null;
+        const guestMentalModelConfig =
+          RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+            ? createGuestMentalModelConfig()
+            : null;
         this.humanManager = createHumanManager({
           scene: this,
           runtime: this.runtime,
@@ -533,6 +573,7 @@ function createRuntimeScene(Phaser) {
           naturalGuestPolicy,
           guestPerceptionPolicy,
           guestBehaviorPolicy,
+          guestMentalModelConfig,
         });
         this.humanController = this.humanManager.getPrimaryHumanController();
         this.humanSelectionController = createHumanSelectionController({
@@ -565,6 +606,7 @@ function createRuntimeScene(Phaser) {
           commandController: this.humanCommandController,
           renderBackdrop: !ZOMBIE_SYSTEMS_ENABLED,
           renderCollisionObstacles: !ZOMBIE_SYSTEMS_ENABLED,
+          getTopLeftUiInsetPx: resolveRuntimeOverlayBottomInsetPx,
         });
         this.humanCommandDebugBridge = {
           setEnabled: (enabled) => {
@@ -743,8 +785,41 @@ function createRuntimeScene(Phaser) {
         visionDebugToggleElement.addEventListener("click", this.handleVisionDebugToggleClick);
       }
 
+      if (trackInspectedGuestToggleElement) {
+        this.handleTrackInspectedGuestToggleClick = () => {
+          this.trackInspectedGuestEnabled = !this.trackInspectedGuestEnabled;
+          this.refreshDebugControlButtons();
+          this.dirty = true;
+        };
+        trackInspectedGuestToggleElement.addEventListener(
+          "click",
+          this.handleTrackInspectedGuestToggleClick
+        );
+      }
+
       if (HUMAN_SYSTEMS_ENABLED) {
         this.handlePointerDown = (pointer) => {
+          const debugEnabled =
+            this.debugController &&
+            typeof this.debugController.isEnabled === "function" &&
+            this.debugController.isEnabled();
+          if (
+            pointer.button === 0 &&
+            pointer.event?.altKey &&
+            debugEnabled &&
+            this.humanDebugOverlay &&
+            typeof this.humanDebugOverlay.handleInspectPointer === "function"
+          ) {
+            const handled = this.humanDebugOverlay.handleInspectPointer(
+              pointer.x,
+              pointer.y
+            );
+            if (handled) {
+              pointer.event.preventDefault();
+              this.dirty = true;
+              return;
+            }
+          }
           if (pointer.button === 0 && pointer.event?.ctrlKey) {
             pointer.event.preventDefault();
             const cameraTile = this.runtime.getCameraTilePosition();
@@ -908,6 +983,13 @@ function createRuntimeScene(Phaser) {
           );
           this.handleVisionDebugToggleClick = null;
         }
+        if (this.handleTrackInspectedGuestToggleClick && trackInspectedGuestToggleElement) {
+          trackInspectedGuestToggleElement.removeEventListener(
+            "click",
+            this.handleTrackInspectedGuestToggleClick
+          );
+          this.handleTrackInspectedGuestToggleClick = null;
+        }
         if (this.humanSelectionController) {
           this.humanSelectionController.destroy();
           this.humanSelectionController = null;
@@ -1023,6 +1105,25 @@ function createRuntimeScene(Phaser) {
           this.gameOverActive = shouldShowGameOver;
           if (this.gameOverOverlay) {
             this.gameOverOverlay.setVisible(this.gameOverActive);
+          }
+        }
+      }
+
+      if (
+        this.trackInspectedGuestEnabled &&
+        this.humanDebugOverlay &&
+        typeof this.humanDebugOverlay.getInspectedGuestWorld === "function"
+      ) {
+        const target = this.humanDebugOverlay.getInspectedGuestWorld();
+        if (Number.isFinite(target?.x) && Number.isFinite(target?.y)) {
+          const cameraTile = this.runtime.getCameraTilePosition();
+          const dxToGuest = target.x - cameraTile.x;
+          const dyToGuest = target.y - cameraTile.y;
+          if (Math.abs(dxToGuest) > 0.0001 || Math.abs(dyToGuest) > 0.0001) {
+            this.runtime.moveCameraBy(dxToGuest, dyToGuest);
+            this.panVelocity.x = 0;
+            this.panVelocity.y = 0;
+            this.dirty = true;
           }
         }
       }
