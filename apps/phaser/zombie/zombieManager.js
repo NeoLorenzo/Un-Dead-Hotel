@@ -938,6 +938,7 @@ export function createZombieManager({
         targetTouchRadiusTiles: target.touchRadiusTiles,
         attackState,
         applyTargetDamage: target.applyDamage,
+        attackerId: zombieId,
         targetId: target.id,
       });
       if (attackResult.attacked) {

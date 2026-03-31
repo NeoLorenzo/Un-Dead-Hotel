@@ -134,6 +134,20 @@ export function createFirstContactDiagnosticsPanel({
         );
       }
 
+      const guestDangerMemory = humanManagerDebug.guestDangerMemory || null;
+      const guestDangerCycle = guestDangerMemory?.lastCycle || null;
+      if (guestDangerMemory?.enabled && guestDangerCycle?.enabled) {
+        lines.push(
+          `Guest danger sources: live ${toInt(
+            guestDangerCycle.liveDangerSourceGuestCount
+          )} | remembered ${toInt(
+            guestDangerCycle.rememberedDangerSourceGuestCount
+          )} | none ${toInt(guestDangerCycle.noDangerSourceGuestCount)} | expired ${toInt(
+            guestDangerCycle.expiredDangerMemoryCount
+          )}`
+        );
+      }
+
       const guestBehaviorCycle = humanManagerDebug.guestBehavior?.lastCycle || null;
       if (guestBehaviorCycle?.enabled) {
         lines.push(
@@ -156,6 +170,7 @@ export function createFirstContactDiagnosticsPanel({
         let wanderingNow = 0;
         let shelterIntentNow = 0;
         let dangerIntentNow = 0;
+        let dangerRetryingNow = 0;
         let replanningCooldownNow = 0;
         let validPathNow = 0;
         let retryingNow = 0;
@@ -177,6 +192,9 @@ export function createFirstContactDiagnosticsPanel({
             validPathNow += 1;
           } else if (guestState?.objectivePathStatus === "retrying") {
             retryingNow += 1;
+            if (guestState?.objectiveState === "danger") {
+              dangerRetryingNow += 1;
+            }
           }
         }
         lines.push(
@@ -190,6 +208,11 @@ export function createFirstContactDiagnosticsPanel({
           )} | danger ${toInt(dangerIntentNow)} | path valid ${toInt(
             validPathNow
           )} | path retrying ${toInt(retryingNow)}`
+        );
+        lines.push(
+          `Guest danger objective: active ${toInt(
+            dangerIntentNow
+          )} | retrying ${toInt(dangerRetryingNow)}`
         );
       }
 
@@ -302,6 +325,33 @@ export function createFirstContactDiagnosticsPanel({
             )}s | count ${toInt(sampleEval.fallback?.retryCount)} | failure ${
               sampleEval.fallback?.lastFailureReason || "n/a"
             }`
+          );
+        }
+
+        const dangerSample = Array.isArray(guestDangerMemory?.byGuest)
+          ? guestDangerMemory.byGuest.find((entry) => entry?.source === "live") ||
+            guestDangerMemory.byGuest.find((entry) => entry?.source === "remembered") ||
+            guestDangerMemory.byGuest[0] ||
+            null
+          : null;
+        if (dangerSample) {
+          lines.push(
+            `Guest danger sample (${dangerSample.id}): source ${dangerSample.source || "none"} | signal ${formatNumber(
+              dangerSample.signalFinal,
+              2
+            )} | live ${formatNumber(dangerSample.signalLive, 2)} | remembered ${formatNumber(
+              dangerSample.signalRemembered,
+              2
+            )}`
+          );
+          lines.push(
+            `Guest danger memory sample (${dangerSample.id}): age ${formatNumber(
+              dangerSample.memoryAgeSeconds,
+              2
+            )}s | expires ${formatNumber(
+              dangerSample.expiresInSeconds,
+              2
+            )}s | expired ${dangerSample.expired === true}`
           );
         }
       }

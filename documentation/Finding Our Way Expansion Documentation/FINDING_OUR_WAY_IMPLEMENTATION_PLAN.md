@@ -13,6 +13,7 @@ Define the implementation plan for the **Finding Our Way** gameplay/AI overhaul:
 
 - Draft created on **March 20, 2026**.
 - Expansion Phase 1 locomotion standardization completed on **March 21, 2026**.
+- Expansion Phase 3 danger recognition and response completed on **March 31, 2026**.
 - This document now tracks remaining implementation work for Expansion Phase 2+.
 
 ## Master Addendum (March 28, 2026)
@@ -23,6 +24,8 @@ Define the implementation plan for the **Finding Our Way** gameplay/AI overhaul:
   - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_3_DANGER_PATHFINDING.md`
   - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_4_BRAIN_MOVEMENT_INTEGRATION.md`
   - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_5_HARDENING_AND_POLISH.md`
+- Phase 3 planning now includes subphase `3E`:
+  - if a guest has danger while in room context, nearest-door egress takes priority before generic danger flee routing.
 - Debug-mode-first rule is locked:
   - Debug mode is a primary development surface.
   - Every mechanic must be observable in debug mode when implemented.

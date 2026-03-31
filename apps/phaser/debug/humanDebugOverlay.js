@@ -52,10 +52,17 @@ const GUEST_TARGET_MARKER_ALPHA = 0.95;
 const GUEST_HEADING_COLOR = 0xbec9ff;
 const GUEST_HEADING_ALPHA = 0.85;
 const GUEST_AREA_ROOM_COLOR = 0x5cff87;
+const GUEST_AREA_ROOM_DANGER_COLOR = 0xff5a5a;
+const GUEST_AREA_ROOM_DANGER_FILL_ALPHA = 0.3;
 const GUEST_AREA_CORRIDOR_COLOR = 0xffb347;
 const GUEST_AREA_OTHER_COLOR = 0xb5b8c4;
 const GUEST_AREA_DOORWAY_COLOR = 0x3fd3ff;
 const GUEST_AREA_MARKER_ALPHA = 0.92;
+const GUEST_DANGER_LIVE_COLOR = 0xff5a5a;
+const GUEST_DANGER_REMEMBERED_COLOR = 0xffb347;
+const GUEST_DANGER_LINE_ALPHA = 0.92;
+const GUEST_DANGER_MARKER_ALPHA = 0.96;
+const GUEST_DANGER_MEMORY_RING_ALPHA = 0.9;
 const GUEST_ARBITRATION_HOLD_COLOR = 0x4ec5ff;
 const GUEST_ARBITRATION_PREEMPT_COLOR = 0xff6b9b;
 const GUEST_ARBITRATION_FALLBACK_COLOR = 0xffc857;
@@ -108,9 +115,12 @@ const SPATIAL_LEGEND_ITEMS = Object.freeze([
   { label: "Known: Room-reveal", backgroundColor: "#2d6f3d" },
   { label: "Known: LOS+Room", backgroundColor: "#347d77" },
   { label: "Area: Room", backgroundColor: "#246845" },
+  { label: "Area: Room (Danger)", backgroundColor: "#7a1d1d" },
   { label: "Area: Corridor", backgroundColor: "#7a5a13" },
   { label: "Area: Doorway->Room", backgroundColor: "#246a7c" },
   { label: "Area: Other", backgroundColor: "#4e5663" },
+  { label: "Danger: Live threat", backgroundColor: "#7a1d1d" },
+  { label: "Danger: Remembered", backgroundColor: "#7a5a13" },
   { label: "Path: Valid", backgroundColor: OBJECTIVE_PATH_STATUS_VALID_BG },
   { label: "Path: Fallback", backgroundColor: OBJECTIVE_PATH_STATUS_FALLBACK_BG },
   { label: "Path: Retrying", backgroundColor: OBJECTIVE_PATH_STATUS_RETRYING_BG },
@@ -752,6 +762,151 @@ function drawVisionCone(
     );
   }
 
+  function formatDangerSignal(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return "0.00";
+    }
+    return Math.max(0, Math.min(1, numeric)).toFixed(2);
+  }
+
+  function drawDangerThreatMarker({
+    guestWorld,
+    threatWorld,
+    markerColor,
+    markerKind = "live",
+    cameraTile,
+    tilePixels,
+    width,
+    height,
+  }) {
+    if (
+      !Number.isFinite(guestWorld?.x) ||
+      !Number.isFinite(guestWorld?.y) ||
+      !Number.isFinite(threatWorld?.x) ||
+      !Number.isFinite(threatWorld?.y)
+    ) {
+      return;
+    }
+    const start = worldToScreen(
+      guestWorld.x,
+      guestWorld.y,
+      cameraTile,
+      tilePixels,
+      width,
+      height
+    );
+    const end = worldToScreen(
+      threatWorld.x,
+      threatWorld.y,
+      cameraTile,
+      tilePixels,
+      width,
+      height
+    );
+
+    overlay.lineStyle(
+      Math.max(1, Math.round(tilePixels * 0.12)),
+      markerColor,
+      GUEST_DANGER_LINE_ALPHA
+    );
+    overlay.beginPath();
+    overlay.moveTo(start.x, start.y);
+    overlay.lineTo(end.x, end.y);
+    overlay.strokePath();
+
+    const markerRadius = Math.max(3, Math.round(tilePixels * 0.2));
+    if (markerKind === "remembered") {
+      overlay.lineStyle(Math.max(1, Math.round(tilePixels * 0.12)), markerColor, 0.98);
+      overlay.strokeRect(
+        Math.round(end.x - markerRadius),
+        Math.round(end.y - markerRadius),
+        markerRadius * 2,
+        markerRadius * 2
+      );
+      overlay.beginPath();
+      overlay.moveTo(end.x - markerRadius, end.y - markerRadius);
+      overlay.lineTo(end.x + markerRadius, end.y + markerRadius);
+      overlay.moveTo(end.x + markerRadius, end.y - markerRadius);
+      overlay.lineTo(end.x - markerRadius, end.y + markerRadius);
+      overlay.strokePath();
+      return;
+    }
+
+    overlay.fillStyle(markerColor, GUEST_DANGER_MARKER_ALPHA);
+    overlay.fillCircle(Math.round(end.x), Math.round(end.y), markerRadius);
+  }
+
+  function drawInspectedGuestDangerOverlay(
+    guestDebug,
+    cameraTile,
+    tilePixels,
+    width,
+    height
+  ) {
+    const world = guestDebug?.worldPosition;
+    const dangerMemory = guestDebug?.dangerMemory || null;
+    if (!dangerMemory || !Number.isFinite(world?.x) || !Number.isFinite(world?.y)) {
+      return;
+    }
+
+    const source = String(dangerMemory.source || "none");
+    const liveThreat = dangerMemory.liveThreatWorld || null;
+    const rememberedThreat = dangerMemory.lastKnownThreatWorld || null;
+    const hasLiveThreat =
+      Number.isFinite(liveThreat?.x) &&
+      Number.isFinite(liveThreat?.y) &&
+      dangerMemory.hasLiveThreat === true;
+    const hasRememberedThreat =
+      Number.isFinite(rememberedThreat?.x) &&
+      Number.isFinite(rememberedThreat?.y) &&
+      dangerMemory.expired !== true;
+
+    if (hasRememberedThreat && source !== "live") {
+      drawDangerThreatMarker({
+        guestWorld: world,
+        threatWorld: rememberedThreat,
+        markerColor: GUEST_DANGER_REMEMBERED_COLOR,
+        markerKind: "remembered",
+        cameraTile,
+        tilePixels,
+        width,
+        height,
+      });
+      const center = worldToScreen(
+        world.x,
+        world.y,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      overlay.lineStyle(
+        Math.max(1, Math.round(tilePixels * 0.12)),
+        GUEST_DANGER_REMEMBERED_COLOR,
+        GUEST_DANGER_MEMORY_RING_ALPHA
+      );
+      overlay.strokeCircle(
+        Math.round(center.x),
+        Math.round(center.y),
+        Math.max(6, Math.round(tilePixels * 0.58))
+      );
+    }
+
+    if (hasLiveThreat) {
+      drawDangerThreatMarker({
+        guestWorld: world,
+        threatWorld: liveThreat,
+        markerColor: GUEST_DANGER_LIVE_COLOR,
+        markerKind: "live",
+        cameraTile,
+        tilePixels,
+        width,
+        height,
+      });
+    }
+  }
+
   function drawGuestPathDiagnostics(
     guestDebug,
     cameraTile,
@@ -1002,6 +1157,25 @@ function drawVisionCone(
     ) {
       return;
     }
+    const dangerMemory = guestDebug?.dangerMemory || null;
+    let roomDangerActive =
+      guestDebug?.objectiveIntent?.objectiveDispatchMode === "danger_room_egress";
+    if (!roomDangerActive && typeof runtime?.classifyAreaAtWorld === "function") {
+      const dangerSource = String(dangerMemory?.source || "none");
+      const dangerWorld =
+        dangerSource === "live"
+          ? dangerMemory?.liveThreatWorld
+          : dangerMemory?.lastKnownThreatWorld;
+      if (dangerSource !== "none" && Number.isFinite(dangerWorld?.x) && Number.isFinite(dangerWorld?.y)) {
+        const guestArea = runtime.classifyAreaAtWorld(world.x, world.y);
+        const dangerArea = runtime.classifyAreaAtWorld(dangerWorld.x, dangerWorld.y);
+        const guestInRoom =
+          guestArea?.inRoom === true || guestArea?.doorwayTreatedAsRoom === true;
+        const dangerInRoom =
+          dangerArea?.inRoom === true || dangerArea?.doorwayTreatedAsRoom === true;
+        roomDangerActive = guestInRoom && dangerInRoom;
+      }
+    }
 
     for (const tile of knowledge.sampleTiles) {
       if (!Number.isFinite(tile?.x) || !Number.isFinite(tile?.y)) {
@@ -1035,6 +1209,11 @@ function drawVisionCone(
         fillColor = TILE_KNOWLEDGE_ROOM_REVEAL_COLOR;
         fillAlpha = 0.26;
       }
+      const isDangerRoomTile = roomDangerActive && tile.inRoom === true;
+      if (isDangerRoomTile) {
+        fillColor = GUEST_AREA_ROOM_DANGER_COLOR;
+        fillAlpha = GUEST_AREA_ROOM_DANGER_FILL_ALPHA;
+      }
       overlay.fillStyle(fillColor, fillAlpha);
       overlay.fillRect(rect.x, rect.y, rect.w, rect.h);
 
@@ -1045,6 +1224,9 @@ function drawVisionCone(
         borderColor = GUEST_AREA_ROOM_COLOR;
       } else if (tile.inCorridor === true) {
         borderColor = GUEST_AREA_CORRIDOR_COLOR;
+      }
+      if (isDangerRoomTile) {
+        borderColor = GUEST_AREA_ROOM_DANGER_COLOR;
       }
       overlay.lineStyle(1, borderColor, identified ? 0.72 : 0.28);
       overlay.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w, rect.h);
@@ -1097,6 +1279,9 @@ function drawVisionCone(
       return;
     }
     const status = resolveObjectivePathOverlayStatus(guestDebug);
+    const mentalEvaluation = guestDebug?.mentalModel?.lastEvaluation || null;
+    const dangerMemory = guestDebug?.dangerMemory || null;
+    const dangerResponse = guestDebug?.dangerResponse || null;
     const statusColor = resolveObjectivePathOverlayColor(status);
     const center = worldToScreen(world.x, world.y, cameraTile, tilePixels, width, height);
     const ringRadius = Math.max(7, tilePixels * 0.5);
@@ -1147,9 +1332,57 @@ function drawVisionCone(
       }
     }
 
-    objectiveStatusTagText.setText(
-      `Obj ${objectiveIntent.objectiveState || "none"} | Path ${status}`
-    );
+    const objectiveState = objectiveIntent.objectiveState || "none";
+    const transitionReasonCode =
+      mentalEvaluation?.objectiveTransitionReasonCode ||
+      mentalEvaluation?.arbitrationReasonCode ||
+      objectiveIntent?.objectiveReasonCode ||
+      "n/a";
+    const objectiveFailureReason =
+      objectiveIntent?.objectiveFailureReason ||
+      dangerResponse?.failureReason ||
+      mentalEvaluation?.fallback?.lastFailureReason ||
+      "none";
+    const previousObjective = mentalEvaluation?.previousObjectiveState || "none";
+    const dangerSource = String(dangerMemory?.source || "none");
+    const labelLines = [
+      `Obj ${objectiveState} | Path ${status}`,
+      `Transition ${previousObjective}->${objectiveState} (${transitionReasonCode})`,
+      `Dispatch ${objectiveIntent.objectiveDispatchMode || "n/a"}`,
+      `Plan ${status} | fail ${objectiveFailureReason}`,
+    ];
+
+    if (dangerSource !== "none" || objectiveState === "danger") {
+      const dangerSignal = formatDangerSignal(dangerMemory?.signalFinal);
+      const expiresInSeconds = Number(dangerMemory?.expiresInSeconds);
+      const memoryAgeSeconds = Number(dangerMemory?.memoryAgeSeconds);
+      const dangerSignalLineParts = [
+        `Danger ${dangerSource}`,
+        `sig ${dangerSignal}`,
+      ];
+      if (dangerSource === "remembered") {
+        if (Number.isFinite(memoryAgeSeconds)) {
+          dangerSignalLineParts.push(`age ${memoryAgeSeconds.toFixed(2)}s`);
+        }
+        if (Number.isFinite(expiresInSeconds)) {
+          dangerSignalLineParts.push(`exp ${Math.max(0, expiresInSeconds).toFixed(2)}s`);
+        }
+      }
+      labelLines.push(dangerSignalLineParts.join(" | "));
+      labelLines.push(
+        `Resp c=${Math.max(0, Math.floor(Number(dangerResponse?.candidateCount) || 0))} | sel=${
+          Number.isFinite(dangerResponse?.selectedCandidateIndex)
+            ? Math.floor(Number(dangerResponse.selectedCandidateIndex))
+            : "n/a"
+        } | score=${
+          Number.isFinite(dangerResponse?.selectedScore)
+            ? Number(dangerResponse.selectedScore).toFixed(2)
+            : "n/a"
+        }${dangerResponse?.tieBreakUsed === true ? " | tie-break" : ""}`
+      );
+    }
+
+    objectiveStatusTagText.setText(labelLines.join("\n"));
     objectiveStatusTagText.setBackgroundColor(
       resolveObjectivePathOverlayBackground(status)
     );
@@ -1419,6 +1652,13 @@ function drawVisionCone(
 
     if (inspectedGuestDebug) {
       drawInspectedGuestSpatialContextOverlay(
+        inspectedGuestDebug,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      drawInspectedGuestDangerOverlay(
         inspectedGuestDebug,
         cameraTile,
         tilePixels,
@@ -1719,6 +1959,8 @@ function drawVisionCone(
       evaluation.fallback?.lastFailureReason ||
       evaluation.pathFeedback?.reason ||
       "none";
+    const dangerMemory = debug?.dangerMemory || null;
+    const dangerResponse = debug?.dangerResponse || null;
     const topContributionTerms = deriveTopDominantContributionTerms({
       evaluation,
       dominantState,
@@ -1747,6 +1989,39 @@ function drawVisionCone(
     lines.push(
       `Fallback: reason=${fallbackReason} | retry=${(Number(evaluation.fallback?.retryRemainingSeconds) || 0).toFixed(2)}s | count=${Math.max(0, Math.floor(Number(evaluation.fallback?.retryCount) || 0))}`
     );
+    if (dangerMemory) {
+      lines.push(
+        `Danger signal: src=${dangerMemory.source || "none"} | final=${formatDangerSignal(
+          dangerMemory.signalFinal
+        )} | live=${formatDangerSignal(dangerMemory.signalLive)} | remembered=${formatDangerSignal(
+          dangerMemory.signalRemembered
+        )}`
+      );
+      lines.push(
+        `Danger memory: age=${(Number(dangerMemory.memoryAgeSeconds) || 0).toFixed(2)}s | expires=${Math.max(
+          0,
+          Number(dangerMemory.expiresInSeconds) || 0
+        ).toFixed(2)}s | expired=${dangerMemory.expired === true}`
+      );
+    }
+    if (dangerResponse) {
+      lines.push(
+        `Danger response: candidates=${Math.max(
+          0,
+          Math.floor(Number(dangerResponse.candidateCount) || 0)
+        )} | selected=${
+          Number.isFinite(dangerResponse.selectedCandidateIndex)
+            ? Math.floor(Number(dangerResponse.selectedCandidateIndex))
+            : "n/a"
+        } | score=${
+          Number.isFinite(dangerResponse.selectedScore)
+            ? Number(dangerResponse.selectedScore).toFixed(2)
+            : "n/a"
+        } | tie_break=${dangerResponse.tieBreakUsed === true} | failure=${
+          dangerResponse.failureReason || "none"
+        }`
+      );
+    }
     lines.push(`Inputs:`);
     for (const inputId of inputs) {
       const value = Number(inputValues[inputId]) || 0;

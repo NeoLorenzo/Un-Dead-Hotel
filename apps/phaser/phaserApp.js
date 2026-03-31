@@ -561,6 +561,15 @@ function createRuntimeScene(Phaser) {
                 wanderReplanSeconds: 1.1,
               }
             : null;
+        const guestDangerPolicy =
+          RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
+            ? {
+                dangerMemoryExpirySeconds: 20.0,
+                dangerRememberedSignalMultiplier: 0.6,
+                dangerLiveDistanceMinTiles: 1.5,
+                dangerLiveDistanceMaxTiles: 8.0,
+              }
+            : null;
         const guestMentalModelConfig =
           RUNTIME_MODE === RUNTIME_MODE_FIRST_CONTACT
             ? createGuestMentalModelConfig()
@@ -573,6 +582,7 @@ function createRuntimeScene(Phaser) {
           naturalGuestPolicy,
           guestPerceptionPolicy,
           guestBehaviorPolicy,
+          guestDangerPolicy,
           guestMentalModelConfig,
         });
         this.humanController = this.humanManager.getPrimaryHumanController();
@@ -662,10 +672,32 @@ function createRuntimeScene(Phaser) {
                 typeof humanController.isDead === "function"
                   ? humanController.isDead()
                   : false,
-              applyDamage: (amount) =>
-                typeof humanController.applyDamage === "function"
-                  ? humanController.applyDamage(amount)
-                  : { changed: false, becameDead: false },
+              applyDamage: (amount, attackContext = null) => {
+                const damageResult =
+                  typeof humanController.applyDamage === "function"
+                    ? humanController.applyDamage(amount)
+                    : { changed: false, becameDead: false };
+                if (
+                  damageResult?.changed === true &&
+                  entry.role === "guest" &&
+                  this.humanManager &&
+                  typeof this.humanManager.reportGuestDamageDangerEvent === "function"
+                ) {
+                  const impactWorld =
+                    typeof humanController.getCurrentWorldPosition === "function"
+                      ? humanController.getCurrentWorldPosition()
+                      : world;
+                  this.humanManager.reportGuestDamageDangerEvent({
+                    guestId: entry.id,
+                    damageAmount: amount,
+                    sourceId: attackContext?.sourceId ?? attackContext?.attackerId ?? null,
+                    sourceWorld: attackContext?.sourceWorld || null,
+                    impactWorld,
+                    reason: attackContext?.reason || "zombie_attack",
+                  });
+                }
+                return damageResult;
+              },
             });
           }
           return targets;

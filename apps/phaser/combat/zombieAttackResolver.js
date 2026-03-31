@@ -63,6 +63,7 @@ export function createZombieAttackResolver({
     targetTouchRadiusTiles,
     attackState,
     applyTargetDamage,
+    attackerId = null,
     targetId = null,
   } = {}) {
     if (!attackState) {
@@ -94,7 +95,27 @@ export function createZombieAttackResolver({
       };
     }
 
-    const damageResult = applyTargetDamage(attackDamage);
+    const damageContext = {
+      reason: "zombie_attack",
+      sourceId:
+        typeof attackerId === "string" || Number.isFinite(attackerId)
+          ? attackerId
+          : null,
+      targetId,
+      sourceWorld: {
+        x: zombie.x,
+        y: zombie.y,
+      },
+      impactWorld: {
+        x: target.x,
+        y: target.y,
+      },
+      targetWorld: {
+        x: target.x,
+        y: target.y,
+      },
+    };
+    const damageResult = applyTargetDamage(attackDamage, damageContext);
     attackState.cooldownRemainingSeconds = attackCooldownSeconds;
     attackState.lastAttackTargetId = targetId;
     attackState.lastAttackDamage = attackDamage;

@@ -5,6 +5,12 @@ import {
   validateGuestMentalModelConfig,
 } from "./guestMentalModel.js";
 import { createGuestMentalModelInputAdapter } from "./guestMentalModelInputs.js";
+import {
+  computeGuestDangerSignal,
+  createGuestDangerMemoryState,
+  getGuestDangerMemoryDebugSnapshot,
+  updateGuestDangerMemoryFromPerception,
+} from "./guestDangerMemory.js";
 import { createHumanPerception } from "./humanPerception.js";
 import { createZombieWanderPlanner } from "../zombie/zombieWanderPlanner.js";
 import {
@@ -35,15 +41,32 @@ const DEFAULT_GUEST_WANDER_FAILED_SECTOR_HALF_ANGLE_DEGREES = 18;
 const DEFAULT_GUEST_WANDER_NO_CANDIDATE_REPICK_COOLDOWN_SECONDS = 0.12;
 const DEFAULT_GUEST_WANDER_CONE_CLIP_RAY_COUNT = 20;
 const DEFAULT_GUEST_MENTAL_EVALUATION_CADENCE_HZ = 4;
+const DEFAULT_GUEST_DANGER_MEMORY_EXPIRY_SECONDS = 20.0;
+const DEFAULT_GUEST_DANGER_REMEMBERED_SIGNAL_MULTIPLIER = 0.6;
+const DEFAULT_GUEST_DANGER_LIVE_DISTANCE_MIN_TILES = 1.5;
+const DEFAULT_GUEST_DANGER_LIVE_DISTANCE_MAX_TILES = 8.0;
+const DEFAULT_GUEST_DANGER_CANDIDATE_SAMPLE_COUNT = 6;
+const DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_SEPARATION = 0.55;
+const DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_HEADING_AWAY = 0.25;
+const DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_LOS_BREAK = 0.2;
+const DEFAULT_GUEST_DANGER_LINE_CHECK_STEP_TILES = 0.2;
 const DEFAULT_GUEST_TILE_KNOWLEDGE_SAMPLE_RADIUS_TILES = 6;
 const MAX_GUEST_TILE_KNOWLEDGE_DEBUG_SAMPLE_TILES = 1024;
 const LOCOMOTION_SUB_TILE_SIZE_TILES = 0.25;
 const SOFT_SEPARATION_MIN_DISTANCE_TILES = HUMAN_COLLIDER_RADIUS_TILES * 2;
 const SOFT_SEPARATION_STRENGTH = 0.45;
 const SOFT_SEPARATION_EPSILON = 0.000001;
+const DOORWAY_TARGET_MIN_DISTANCE_TILES = 0.2;
 
 function isFiniteNumber(value) {
   return Number.isFinite(value);
+}
+
+function clamp01(value) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, Number(value)));
 }
 
 function normalizeWorldPoint(point) {
@@ -51,6 +74,26 @@ function normalizeWorldPoint(point) {
     x: Number(point?.x) || 0,
     y: Number(point?.y) || 0,
   };
+}
+
+function normalizeVector2(vector) {
+  const x = Number(vector?.x) || 0;
+  const y = Number(vector?.y) || 0;
+  const length = Math.hypot(x, y);
+  if (length <= 0.000001) {
+    return {
+      x: 0,
+      y: 0,
+    };
+  }
+  return {
+    x: x / length,
+    y: y / length,
+  };
+}
+
+function dotVector2(a, b) {
+  return (Number(a?.x) || 0) * (Number(b?.x) || 0) + (Number(a?.y) || 0) * (Number(b?.y) || 0);
 }
 
 function normalizeAngleRadians(angleRadians) {
@@ -147,6 +190,7 @@ export function createHumanManager({
   naturalGuestPolicy = null,
   guestPerceptionPolicy = null,
   guestBehaviorPolicy = null,
+  guestDangerPolicy = null,
   guestMentalModelConfig = null,
 } = {}) {
   if (!scene || !runtime) {
@@ -169,19 +213,7 @@ export function createHumanManager({
   const guestMentalEvaluationIntervalSeconds =
     guestMentalEvaluationCadenceHz > 0 ? 1 / guestMentalEvaluationCadenceHz : Infinity;
   const guestTileKnowledgeById = new Map();
-  const guestMentalInputAdapter = guestMentalModelEnabled
-    ? createGuestMentalModelInputAdapter({
-        runtime,
-        areaContextResolver: ({
-          guestController = null,
-          guestId = null,
-        } = {}) =>
-          resolveGuestPerceivedAreaContext({
-            guestController,
-            guestId,
-          }),
-      })
-    : null;
+  const guestDangerMemoryById = new Map();
 
   const humansById = new Map();
   let nextGuestId = 1;
@@ -241,6 +273,115 @@ export function createHumanManager({
   });
   let lastGuestPerceptionCycle = null;
   const guestPerceptionById = new Map();
+  const resolvedGuestDangerPolicy = {
+    dangerMemoryExpirySeconds: Math.max(
+      0.01,
+      Number(guestDangerPolicy?.dangerMemoryExpirySeconds) ||
+        DEFAULT_GUEST_DANGER_MEMORY_EXPIRY_SECONDS
+    ),
+    dangerRememberedSignalMultiplier: Math.max(
+      0,
+      Math.min(
+        1,
+        Number(guestDangerPolicy?.dangerRememberedSignalMultiplier) ||
+          DEFAULT_GUEST_DANGER_REMEMBERED_SIGNAL_MULTIPLIER
+      )
+    ),
+    dangerLiveDistanceMinTiles: Math.max(
+      0,
+      Number(guestDangerPolicy?.dangerLiveDistanceMinTiles) ||
+        DEFAULT_GUEST_DANGER_LIVE_DISTANCE_MIN_TILES
+    ),
+    dangerLiveDistanceMaxTiles: 0,
+    dangerCandidateSampleCount: Math.max(
+      1,
+      Math.floor(
+        Number(guestDangerPolicy?.dangerCandidateSampleCount) ||
+          DEFAULT_GUEST_DANGER_CANDIDATE_SAMPLE_COUNT
+      )
+    ),
+    dangerCandidateWeights: {
+      separation: Math.max(
+        0,
+        Number(guestDangerPolicy?.dangerCandidateWeights?.separation) ||
+          DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_SEPARATION
+      ),
+      headingAway: Math.max(
+        0,
+        Number(guestDangerPolicy?.dangerCandidateWeights?.headingAway) ||
+          DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_HEADING_AWAY
+      ),
+      losBreak: Math.max(
+        0,
+        Number(guestDangerPolicy?.dangerCandidateWeights?.losBreak) ||
+          DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_LOS_BREAK
+      ),
+    },
+    dangerLineCheckStepTiles: Math.max(
+      0.05,
+      Number(guestDangerPolicy?.dangerLineCheckStepTiles) ||
+        DEFAULT_GUEST_DANGER_LINE_CHECK_STEP_TILES
+    ),
+  };
+  resolvedGuestDangerPolicy.dangerLiveDistanceMaxTiles = Math.max(
+    resolvedGuestDangerPolicy.dangerLiveDistanceMinTiles + 0.01,
+    Number(guestDangerPolicy?.dangerLiveDistanceMaxTiles) ||
+      DEFAULT_GUEST_DANGER_LIVE_DISTANCE_MAX_TILES
+  );
+  const dangerCandidateWeightSum =
+    resolvedGuestDangerPolicy.dangerCandidateWeights.separation +
+    resolvedGuestDangerPolicy.dangerCandidateWeights.headingAway +
+    resolvedGuestDangerPolicy.dangerCandidateWeights.losBreak;
+  if (dangerCandidateWeightSum > 0.000001) {
+    resolvedGuestDangerPolicy.dangerCandidateWeights.separation /=
+      dangerCandidateWeightSum;
+    resolvedGuestDangerPolicy.dangerCandidateWeights.headingAway /=
+      dangerCandidateWeightSum;
+    resolvedGuestDangerPolicy.dangerCandidateWeights.losBreak /= dangerCandidateWeightSum;
+  } else {
+    resolvedGuestDangerPolicy.dangerCandidateWeights = {
+      separation: DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_SEPARATION,
+      headingAway: DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_HEADING_AWAY,
+      losBreak: DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_LOS_BREAK,
+    };
+  }
+  const guestMentalInputAdapter = guestMentalModelEnabled
+    ? createGuestMentalModelInputAdapter({
+        runtime,
+        dangerDistanceSignalProvider: ({
+          guestController = null,
+          guestId = null,
+        } = {}) => {
+          if (!guestPerceptionEnabled || guestId == null) {
+            return 0;
+          }
+          const dangerMemoryState = guestDangerMemoryById.get(guestId);
+          if (!dangerMemoryState) {
+            return 0;
+          }
+          const guestWorld =
+            typeof guestController?.getCurrentWorldPosition === "function"
+              ? guestController.getCurrentWorldPosition()
+              : null;
+          const nowMs = scene.time?.now ?? performance.now();
+          const signal = computeGuestDangerSignal({
+            state: dangerMemoryState,
+            guestWorld,
+            nowMs,
+            config: resolvedGuestDangerPolicy,
+          });
+          return signal.signalFinal;
+        },
+        areaContextResolver: ({
+          guestController = null,
+          guestId = null,
+        } = {}) =>
+          resolveGuestPerceivedAreaContext({
+            guestController,
+            guestId,
+          }),
+      })
+    : null;
   const guestWanderPlanner = createZombieWanderPlanner({
     runtime,
     ...(guestBehaviorPolicy?.wanderPlanner || {}),
@@ -295,9 +436,11 @@ export function createHumanManager({
   const guestBehaviorById = new Map();
   const guestMentalPathFeedbackById = new Map();
   const guestWaypointSelectionDebugById = new Map();
+  const guestDangerResponseDebugById = new Map();
   const guestWanderStateById = new Map();
   const guestMentalStateById = new Map();
   let lastGuestBehaviorCycle = null;
+  let lastGuestDangerMemoryCycle = null;
   let lastGuestMentalCycle = null;
   let totalGuestConversions = 0;
   let lastGuestConversionCycle = null;
@@ -622,10 +765,12 @@ export function createHumanManager({
     record.role = ROLE_SURVIVOR;
 
     guestPerceptionById.delete(guestId);
+    guestDangerMemoryById.delete(guestId);
     guestBehaviorById.delete(guestId);
     guestTileKnowledgeById.delete(guestId);
     guestMentalPathFeedbackById.delete(guestId);
     guestWaypointSelectionDebugById.delete(guestId);
+    guestDangerResponseDebugById.delete(guestId);
     guestWanderStateById.delete(guestId);
     guestMentalStateById.delete(guestId);
     totalGuestConversions += 1;
@@ -875,10 +1020,12 @@ export function createHumanManager({
     record.controller.destroy();
     humansById.delete(humanId);
     guestPerceptionById.delete(humanId);
+    guestDangerMemoryById.delete(humanId);
     guestBehaviorById.delete(humanId);
     guestTileKnowledgeById.delete(humanId);
     guestMentalPathFeedbackById.delete(humanId);
     guestWaypointSelectionDebugById.delete(humanId);
+    guestDangerResponseDebugById.delete(humanId);
     guestWanderStateById.delete(humanId);
     guestMentalStateById.delete(humanId);
     return true;
@@ -1023,13 +1170,169 @@ export function createHumanManager({
     const visibleTileCountChanged =
       Math.floor(Number(previous?.visibleTileCount) || 0) !==
       Math.floor(Number(nextState?.visibleTileCount) || 0);
+    const dangerSourceChanged =
+      String(previous?.dangerSource || "none") !==
+      String(nextState?.dangerSource || "none");
+    const dangerSignalChanged =
+      Math.abs(
+        (Number(previous?.dangerSignal) || 0) -
+          (Number(nextState?.dangerSignal) || 0)
+      ) > 0.001;
     guestPerceptionById.set(humanId, nextState);
-    return targetChanged || detectedChanged || visibleTileCountChanged;
+    return (
+      targetChanged ||
+      detectedChanged ||
+      visibleTileCountChanged ||
+      dangerSourceChanged ||
+      dangerSignalChanged
+    );
+  }
+
+  function getGuestDangerMemoryState(humanId) {
+    let state = guestDangerMemoryById.get(humanId);
+    if (!state) {
+      state = createGuestDangerMemoryState();
+      guestDangerMemoryById.set(humanId, state);
+    }
+    return state;
+  }
+
+  function buildGuestDangerMemoryDebugSnapshot(humanId, guestController = null) {
+    const state = guestDangerMemoryById.get(humanId);
+    if (!state) {
+      return null;
+    }
+    const world =
+      typeof guestController?.getCurrentWorldPosition === "function"
+        ? guestController.getCurrentWorldPosition()
+        : null;
+    const nowMs = scene.time?.now ?? performance.now();
+    return getGuestDangerMemoryDebugSnapshot(
+      state,
+      nowMs,
+      resolvedGuestDangerPolicy,
+      world
+    );
+  }
+
+  function reportGuestDamageDangerEvent({
+    guestId = null,
+    sourceId = null,
+    sourceWorld = null,
+    impactWorld = null,
+    damageAmount = null,
+    reason = "damage_taken",
+    nowMs = null,
+  } = {}) {
+    if (guestId == null) {
+      return false;
+    }
+    const record = humansById.get(guestId);
+    if (!record || !record.controller) {
+      return false;
+    }
+    const role =
+      typeof record.controller.getRole === "function"
+        ? record.controller.getRole()
+        : record.role;
+    if (role !== ROLE_GUEST || !isControllerAlive(record.controller)) {
+      return false;
+    }
+    if (Number(damageAmount) <= 0) {
+      return false;
+    }
+    const guestWorld =
+      typeof record.controller.getCurrentWorldPosition === "function"
+        ? record.controller.getCurrentWorldPosition()
+        : null;
+    if (!Number.isFinite(guestWorld?.x) || !Number.isFinite(guestWorld?.y)) {
+      return false;
+    }
+
+    let threatWorld = null;
+    // Damage reaction should anchor danger at impact location first ("where the guest got hit").
+    if (Number.isFinite(impactWorld?.x) && Number.isFinite(impactWorld?.y)) {
+      threatWorld = {
+        x: Number(impactWorld.x),
+        y: Number(impactWorld.y),
+      };
+    } else if (Number.isFinite(sourceWorld?.x) && Number.isFinite(sourceWorld?.y)) {
+      threatWorld = {
+        x: Number(sourceWorld.x),
+        y: Number(sourceWorld.y),
+      };
+    }
+    if (!threatWorld) {
+      return false;
+    }
+
+    const timestampMs = Number.isFinite(nowMs)
+      ? Number(nowMs)
+      : scene.time?.now ?? performance.now();
+    const distanceToThreat = Math.hypot(
+      threatWorld.x - guestWorld.x,
+      threatWorld.y - guestWorld.y
+    );
+    const dangerMemoryState = getGuestDangerMemoryState(guestId);
+
+    // Prime memory with impact source and immediately transition to remembered state.
+    // This ensures guests react even when attack came from outside current LOS.
+    updateGuestDangerMemoryFromPerception({
+      state: dangerMemoryState,
+      perceptionState: {
+        detected: true,
+        targetId:
+          typeof sourceId === "string" || Number.isFinite(sourceId)
+            ? sourceId
+            : `${reason || "damage_taken"}_${guestId}`,
+        targetWorld: {
+          x: threatWorld.x,
+          y: threatWorld.y,
+        },
+        distanceToTarget: Number.isFinite(distanceToThreat) ? distanceToThreat : null,
+      },
+      nowMs: timestampMs,
+      config: resolvedGuestDangerPolicy,
+    });
+    updateGuestDangerMemoryFromPerception({
+      state: dangerMemoryState,
+      perceptionState: {
+        detected: false,
+        targetId: null,
+        targetWorld: null,
+        distanceToTarget: null,
+      },
+      nowMs: timestampMs,
+      config: resolvedGuestDangerPolicy,
+    });
+
+    const dangerSignal = computeGuestDangerSignal({
+      state: dangerMemoryState,
+      guestWorld,
+      nowMs: timestampMs,
+      config: resolvedGuestDangerPolicy,
+    });
+    const previousPerception = guestPerceptionById.get(guestId) || {
+      detected: false,
+      targetId: null,
+      targetWorld: null,
+      distanceToTarget: null,
+      visibleTileCount: 0,
+    };
+    guestPerceptionById.set(guestId, {
+      ...previousPerception,
+      dangerSignal: dangerSignal.signalFinal,
+      dangerSource: dangerSignal.source,
+    });
+    return true;
   }
 
   function runGuestPerceptionStep() {
     if (!guestPerceptionEnabled) {
       lastGuestPerceptionCycle = {
+        enabled: false,
+      };
+      lastGuestDangerMemoryCycle = {
         enabled: false,
       };
       return false;
@@ -1046,6 +1349,11 @@ export function createHumanManager({
     let lineOfSightClearCount = 0;
     let visibleTileCount = 0;
     let roomRevealTileCount = 0;
+    let liveDangerSourceGuestCount = 0;
+    let rememberedDangerSourceGuestCount = 0;
+    let noDangerSourceGuestCount = 0;
+    let expiredDangerMemoryCount = 0;
+    const nowMs = scene.time?.now ?? performance.now();
 
     for (const [humanId] of guestPerceptionById.entries()) {
       if (!activeGuestIds.has(humanId)) {
@@ -1055,6 +1363,11 @@ export function createHumanManager({
     for (const [humanId] of guestTileKnowledgeById.entries()) {
       if (!activeGuestIds.has(humanId)) {
         guestTileKnowledgeById.delete(humanId);
+      }
+    }
+    for (const [humanId] of guestDangerMemoryById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestDangerMemoryById.delete(humanId);
       }
     }
 
@@ -1104,6 +1417,31 @@ export function createHumanManager({
           Math.floor(Number(evaluation?.stats?.visibleTileCount) || 0)
         ),
       };
+      const dangerMemoryState = getGuestDangerMemoryState(guest.id);
+      updateGuestDangerMemoryFromPerception({
+        state: dangerMemoryState,
+        perceptionState: nextState,
+        nowMs,
+        config: resolvedGuestDangerPolicy,
+      });
+      const dangerSignal = computeGuestDangerSignal({
+        state: dangerMemoryState,
+        guestWorld: controller.getCurrentWorldPosition(),
+        nowMs,
+        config: resolvedGuestDangerPolicy,
+      });
+      nextState.dangerSignal = dangerSignal.signalFinal;
+      nextState.dangerSource = dangerSignal.source;
+      if (dangerSignal.source === "live") {
+        liveDangerSourceGuestCount += 1;
+      } else if (dangerSignal.source === "remembered") {
+        rememberedDangerSourceGuestCount += 1;
+      } else {
+        noDangerSourceGuestCount += 1;
+      }
+      if (dangerSignal.expired === true) {
+        expiredDangerMemoryCount += 1;
+      }
       if (setGuestPerceptionState(guest.id, nextState)) {
         changed = true;
       }
@@ -1120,6 +1458,19 @@ export function createHumanManager({
       visibleTileCount,
       roomRevealTileCount,
       lineCheckStepTiles: config.lineCheckStepTiles,
+    };
+    lastGuestDangerMemoryCycle = {
+      enabled: true,
+      guestCount: guests.length,
+      liveDangerSourceGuestCount,
+      rememberedDangerSourceGuestCount,
+      noDangerSourceGuestCount,
+      expiredDangerMemoryCount,
+      dangerMemoryExpirySeconds: resolvedGuestDangerPolicy.dangerMemoryExpirySeconds,
+      dangerRememberedSignalMultiplier:
+        resolvedGuestDangerPolicy.dangerRememberedSignalMultiplier,
+      dangerLiveDistanceMinTiles: resolvedGuestDangerPolicy.dangerLiveDistanceMinTiles,
+      dangerLiveDistanceMaxTiles: resolvedGuestDangerPolicy.dangerLiveDistanceMaxTiles,
     };
 
     return changed;
@@ -1597,6 +1948,11 @@ export function createHumanManager({
         guestMentalPathFeedbackById.delete(humanId);
       }
     }
+    for (const [humanId] of guestDangerResponseDebugById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestDangerResponseDebugById.delete(humanId);
+      }
+    }
 
     const dt = Math.max(0, Number(dtSeconds) || 0);
     for (const guest of guests) {
@@ -1735,6 +2091,356 @@ export function createHumanManager({
     };
   }
 
+  function hasClearLineOfSightBetweenWorld(startWorld, endWorld) {
+    if (
+      !Number.isFinite(startWorld?.x) ||
+      !Number.isFinite(startWorld?.y) ||
+      !Number.isFinite(endWorld?.x) ||
+      !Number.isFinite(endWorld?.y)
+    ) {
+      return false;
+    }
+    const dx = endWorld.x - startWorld.x;
+    const dy = endWorld.y - startWorld.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 0.000001) {
+      return true;
+    }
+    const stepTiles = Math.max(
+      0.05,
+      Number(resolvedGuestDangerPolicy.dangerLineCheckStepTiles) ||
+        DEFAULT_GUEST_DANGER_LINE_CHECK_STEP_TILES
+    );
+    const sampleCount = Math.max(1, Math.ceil(distance / stepTiles));
+    for (let i = 1; i <= sampleCount; i += 1) {
+      const t = i / sampleCount;
+      const sampleX = startWorld.x + dx * t;
+      const sampleY = startWorld.y + dy * t;
+      if (typeof runtime.isWalkableWorldRect === "function") {
+        if (
+          !runtime.isWalkableWorldRect(
+            sampleX,
+            sampleY,
+            HUMAN_COLLIDER_RADIUS_TILES,
+            HUMAN_COLLIDER_RADIUS_TILES
+          )
+        ) {
+          return false;
+        }
+      } else if (typeof runtime.isWalkableWorldPoint === "function") {
+        if (
+          !runtime.isWalkableWorldPoint(
+            sampleX,
+            sampleY,
+            HUMAN_COLLIDER_RADIUS_TILES
+          )
+        ) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  function collectGuestDangerCandidates({
+    guestWorld,
+    fleeHeadingRadians,
+    wanderState,
+    visionCone,
+  }) {
+    const sampleCount = Math.max(
+      1,
+      Math.floor(
+        Number(resolvedGuestDangerPolicy.dangerCandidateSampleCount) ||
+          DEFAULT_GUEST_DANGER_CANDIDATE_SAMPLE_COUNT
+      )
+    );
+    const candidates = [];
+    const seenWaypointKeys = new Set();
+    for (let i = 0; i < sampleCount; i += 1) {
+      const selection = guestWanderPlanner.pickWaypointForZombie(
+        {
+          getWorldPosition: () => ({ ...guestWorld }),
+          getHeadingRadians: () => fleeHeadingRadians,
+          getVisionCone: () => visionCone || { angleDegrees: 90, rangeTiles: 8 },
+        },
+        {
+          includeDebug: true,
+          blockedSectorsRadians: wanderState.failedSectors,
+        }
+      );
+      const normalized = normalizeWaypointSelection(selection);
+      const waypoint = normalized.waypoint;
+      if (!waypoint) {
+        continue;
+      }
+      const key = `${waypoint.x.toFixed(3)},${waypoint.y.toFixed(3)}`;
+      if (seenWaypointKeys.has(key)) {
+        continue;
+      }
+      seenWaypointKeys.add(key);
+      candidates.push({
+        waypoint: {
+          x: waypoint.x,
+          y: waypoint.y,
+        },
+        plannerDebug: normalized.debug || null,
+        candidateIndex: candidates.length,
+      });
+    }
+    return candidates;
+  }
+
+  function selectBestGuestDangerCandidate({
+    guestWorld,
+    threatWorld,
+    candidates,
+  }) {
+    const currentDistance = Math.hypot(
+      guestWorld.x - threatWorld.x,
+      guestWorld.y - threatWorld.y
+    );
+    const awayVector = normalizeVector2({
+      x: guestWorld.x - threatWorld.x,
+      y: guestWorld.y - threatWorld.y,
+    });
+    const maxDistanceTiles = Math.max(
+      0.01,
+      Number(resolvedGuestDangerPolicy.dangerLiveDistanceMaxTiles) || 8
+    );
+    const weights = resolvedGuestDangerPolicy.dangerCandidateWeights;
+    let selected = null;
+    let tieBreakUsed = false;
+    for (const candidate of candidates) {
+      const moveVector = normalizeVector2({
+        x: candidate.waypoint.x - guestWorld.x,
+        y: candidate.waypoint.y - guestWorld.y,
+      });
+      const candidateDistance = Math.hypot(
+        candidate.waypoint.x - threatWorld.x,
+        candidate.waypoint.y - threatWorld.y
+      );
+      const separationGain = candidateDistance - currentDistance;
+      const separationGainScore = clamp01(separationGain / maxDistanceTiles);
+      const headingAwayScore = clamp01((dotVector2(moveVector, awayVector) + 1) * 0.5);
+      const losBreakScore = hasClearLineOfSightBetweenWorld(
+        threatWorld,
+        candidate.waypoint
+      )
+        ? 0
+        : 1;
+      const weightedScore =
+        separationGainScore * weights.separation +
+        headingAwayScore * weights.headingAway +
+        losBreakScore * weights.losBreak;
+      const scored = {
+        ...candidate,
+        separationGainScore,
+        headingAwayScore,
+        losBreakScore,
+        weightedScore,
+      };
+      if (!selected) {
+        selected = scored;
+        continue;
+      }
+      const scoreDelta = scored.weightedScore - selected.weightedScore;
+      if (scoreDelta > 0.000001) {
+        selected = scored;
+        continue;
+      }
+      if (Math.abs(scoreDelta) > 0.000001) {
+        continue;
+      }
+      tieBreakUsed = true;
+      if (scored.losBreakScore > selected.losBreakScore + 0.000001) {
+        selected = scored;
+        continue;
+      }
+      if (Math.abs(scored.losBreakScore - selected.losBreakScore) > 0.000001) {
+        continue;
+      }
+      if (scored.separationGainScore > selected.separationGainScore + 0.000001) {
+        selected = scored;
+        continue;
+      }
+      if (
+        Math.abs(scored.separationGainScore - selected.separationGainScore) > 0.000001
+      ) {
+        continue;
+      }
+      if (scored.headingAwayScore > selected.headingAwayScore + 0.000001) {
+        selected = scored;
+        continue;
+      }
+      if (Math.abs(scored.headingAwayScore - selected.headingAwayScore) > 0.000001) {
+        continue;
+      }
+      if (scored.candidateIndex < selected.candidateIndex) {
+        selected = scored;
+      }
+    }
+    return {
+      selected,
+      tieBreakUsed,
+    };
+  }
+
+  function getDoorwayWorldCenter(tileX, tileY) {
+    const normalizedTileX = Math.floor(Number(tileX));
+    const normalizedTileY = Math.floor(Number(tileY));
+    if (!Number.isFinite(normalizedTileX) || !Number.isFinite(normalizedTileY)) {
+      return null;
+    }
+    if (typeof runtime?.tileToWorldCenter === "function") {
+      return runtime.tileToWorldCenter(normalizedTileX, normalizedTileY);
+    }
+    return {
+      x: normalizedTileX + 0.5,
+      y: normalizedTileY + 0.5,
+    };
+  }
+
+  function resolveRoomDoorwayTargetsForGuest(guestWorld) {
+    if (
+      !Number.isFinite(guestWorld?.x) ||
+      !Number.isFinite(guestWorld?.y) ||
+      typeof runtime?.getRoomTilesAtWorld !== "function" ||
+      typeof runtime?.classifyAreaAtWorld !== "function"
+    ) {
+      return [];
+    }
+    const roomData = runtime.getRoomTilesAtWorld(guestWorld.x, guestWorld.y);
+    if (!roomData || !Array.isArray(roomData.tiles) || roomData.tiles.length === 0) {
+      return [];
+    }
+
+    const doorwayByTileKey = new Map();
+    const addDoorwayCandidate = (tileX, tileY) => {
+      const normalizedTileX = Math.floor(Number(tileX));
+      const normalizedTileY = Math.floor(Number(tileY));
+      if (!Number.isFinite(normalizedTileX) || !Number.isFinite(normalizedTileY)) {
+        return;
+      }
+      const tileKeyValue = worldTileKey(normalizedTileX, normalizedTileY);
+      if (doorwayByTileKey.has(tileKeyValue)) {
+        return;
+      }
+      const doorwayWorld = getDoorwayWorldCenter(normalizedTileX, normalizedTileY);
+      if (!doorwayWorld) {
+        return;
+      }
+      const classified = runtime.classifyAreaAtWorld(doorwayWorld.x, doorwayWorld.y);
+      if (classified?.isDoorwayTile !== true) {
+        return;
+      }
+      if (
+        typeof runtime?.isWalkableTile === "function" &&
+        runtime.isWalkableTile(normalizedTileX, normalizedTileY) !== true
+      ) {
+        return;
+      }
+      doorwayByTileKey.set(tileKeyValue, {
+        tileX: normalizedTileX,
+        tileY: normalizedTileY,
+        world: {
+          x: doorwayWorld.x,
+          y: doorwayWorld.y,
+        },
+        distanceTiles: Math.hypot(
+          doorwayWorld.x - guestWorld.x,
+          doorwayWorld.y - guestWorld.y
+        ),
+      });
+    };
+
+    for (const tile of roomData.tiles) {
+      addDoorwayCandidate(tile?.x, tile?.y);
+    }
+
+    if (doorwayByTileKey.size === 0) {
+      let minTileX = Infinity;
+      let maxTileX = -Infinity;
+      let minTileY = Infinity;
+      let maxTileY = -Infinity;
+      for (const tile of roomData.tiles) {
+        const tileX = Math.floor(Number(tile?.x));
+        const tileY = Math.floor(Number(tile?.y));
+        if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+          continue;
+        }
+        minTileX = Math.min(minTileX, tileX);
+        maxTileX = Math.max(maxTileX, tileX);
+        minTileY = Math.min(minTileY, tileY);
+        maxTileY = Math.max(maxTileY, tileY);
+      }
+      if (
+        Number.isFinite(minTileX) &&
+        Number.isFinite(maxTileX) &&
+        Number.isFinite(minTileY) &&
+        Number.isFinite(maxTileY)
+      ) {
+        for (let tileY = minTileY - 1; tileY <= maxTileY + 1; tileY += 1) {
+          for (let tileX = minTileX - 1; tileX <= maxTileX + 1; tileX += 1) {
+            const onPerimeter =
+              tileX === minTileX - 1 ||
+              tileX === maxTileX + 1 ||
+              tileY === minTileY - 1 ||
+              tileY === maxTileY + 1;
+            if (!onPerimeter) {
+              continue;
+            }
+            addDoorwayCandidate(tileX, tileY);
+          }
+        }
+      }
+    }
+
+    return Array.from(doorwayByTileKey.values())
+      .filter(
+        (candidate) =>
+          Number(candidate?.distanceTiles) > DOORWAY_TARGET_MIN_DISTANCE_TILES
+      )
+      .sort((a, b) => {
+      const distanceDelta = (a.distanceTiles || 0) - (b.distanceTiles || 0);
+      if (Math.abs(distanceDelta) > 0.000001) {
+        return distanceDelta;
+      }
+      if (a.tileX !== b.tileX) {
+        return a.tileX - b.tileX;
+      }
+      return a.tileY - b.tileY;
+      });
+  }
+
+  function resolveDangerRoomEgressContext({ guestWorld, threatWorld }) {
+    if (
+      !Number.isFinite(guestWorld?.x) ||
+      !Number.isFinite(guestWorld?.y) ||
+      !Number.isFinite(threatWorld?.x) ||
+      !Number.isFinite(threatWorld?.y) ||
+      typeof runtime?.classifyAreaAtWorld !== "function"
+    ) {
+      return {
+        applicable: false,
+        guestArea: null,
+        threatArea: null,
+      };
+    }
+    const guestArea = runtime.classifyAreaAtWorld(guestWorld.x, guestWorld.y);
+    const threatArea = runtime.classifyAreaAtWorld(threatWorld.x, threatWorld.y);
+    const guestInRoom =
+      guestArea?.inRoom === true || guestArea?.doorwayTreatedAsRoom === true;
+    const guestAlreadyOnDoorway = guestArea?.isDoorwayTile === true;
+    const threatInRoom =
+      threatArea?.inRoom === true || threatArea?.doorwayTreatedAsRoom === true;
+    return {
+      applicable: guestInRoom && !guestAlreadyOnDoorway && threatInRoom,
+      guestArea,
+      threatArea,
+    };
+  }
+
   function runGuestBehaviorStep(dtSeconds, { recordCycle = true } = {}) {
     function registerGuestWaypointFailure(
       guestId,
@@ -1854,22 +2560,54 @@ export function createHumanManager({
       }
 
       const perception = guestPerceptionById.get(guest.id) || null;
-      const hasThreat =
+      const currentGuestWorld = controller.getCurrentWorldPosition();
+      const hasLiveThreat =
         perception?.detected === true &&
         Number.isFinite(perception?.targetWorld?.x) &&
         Number.isFinite(perception?.targetWorld?.y);
+      const rememberedThreatWorld = normalizeWorldPoint(
+        guestDangerMemoryById.get(guest.id)?.lastKnownThreatWorld
+      );
+      const threatWorldForDanger = hasLiveThreat
+        ? perception.targetWorld
+        : Number.isFinite(rememberedThreatWorld?.x) &&
+            Number.isFinite(rememberedThreatWorld?.y)
+          ? rememberedThreatWorld
+          : null;
+      const hasDangerTarget =
+        Number.isFinite(threatWorldForDanger?.x) &&
+        Number.isFinite(threatWorldForDanger?.y);
+      const roomDangerContextForMode = hasDangerTarget
+        ? resolveDangerRoomEgressContext({
+            guestWorld: currentGuestWorld,
+            threatWorld: threatWorldForDanger,
+          })
+        : {
+            applicable: false,
+            guestArea: null,
+            threatArea: null,
+          };
       const mentalEvaluation =
         guestMentalStateById.get(guest.id)?.runtime?.lastEvaluationResult || null;
-      const objectiveStateRaw =
+      const objectiveStateRawFromBrain =
         mentalEvaluation?.objectiveState ||
         mentalEvaluation?.dominantState ||
         "wander";
-      const objectiveState =
-        objectiveStateRaw === "danger" ||
-        objectiveStateRaw === "shelter" ||
-        objectiveStateRaw === "wander"
-          ? objectiveStateRaw
+      const objectiveStateFromBrain =
+        objectiveStateRawFromBrain === "danger" ||
+        objectiveStateRawFromBrain === "shelter" ||
+        objectiveStateRawFromBrain === "wander"
+          ? objectiveStateRawFromBrain
           : "wander";
+      const hasActiveDangerSource =
+        String(perception?.dangerSource || "none") !== "none" || hasDangerTarget;
+      const roomDangerOverrideActive =
+        objectiveStateFromBrain !== "danger" &&
+        roomDangerContextForMode.applicable === true &&
+        hasActiveDangerSource;
+      const objectiveState = roomDangerOverrideActive
+        ? "danger"
+        : objectiveStateFromBrain;
       if (objectiveState === "danger") {
         dangerIntentGuestCount += 1;
       } else if (objectiveState === "shelter") {
@@ -1879,14 +2617,27 @@ export function createHumanManager({
       }
       const desiredMode = objectiveState === "danger" ? "flee" : "wander";
       const behavior = getGuestBehaviorState(guest.id);
+      if (!guestDangerResponseDebugById.has(guest.id)) {
+        guestDangerResponseDebugById.set(guest.id, {
+          candidateCount: 0,
+          selectedCandidateIndex: null,
+          selectedScore: null,
+          tieBreakUsed: false,
+          failureReason: null,
+        });
+      }
       behavior.objectiveState = objectiveState;
       behavior.objectiveDispatchMode =
         objectiveState === "danger"
-          ? "danger_flee"
+          ? behavior.lastPlanReason === "danger_room_egress_nearest_door"
+            ? "danger_room_egress"
+            : "danger_flee"
           : objectiveState === "shelter"
             ? "shelter_proxy_wander"
             : "wander";
-      behavior.objectiveReasonCode = mentalEvaluation?.arbitrationReasonCode || null;
+      behavior.objectiveReasonCode = roomDangerOverrideActive
+        ? "room_danger_override"
+        : mentalEvaluation?.arbitrationReasonCode || null;
       behavior.objectiveFailureReason = null;
       behavior.objectiveTargetWorld = null;
       behavior.replanCooldownSeconds = Math.max(0, behavior.replanCooldownSeconds - dt);
@@ -1908,12 +2659,20 @@ export function createHumanManager({
       }
       behavior.targetId = perception?.targetId ?? null;
 
+      let forceDangerRoomEgressReplan = false;
+      if (desiredMode === "flee" && hasDangerTarget) {
+        forceDangerRoomEgressReplan =
+          roomDangerContextForMode.applicable === true &&
+          behavior.objectiveDispatchMode !== "danger_room_egress";
+      }
+
       const hasActivePath = controller.hasWaypoint();
       const shouldReplanForFlee =
         modeChanged ||
         blockedEvent !== null ||
         !hasActivePath ||
-        behavior.replanCooldownSeconds <= 0;
+        behavior.replanCooldownSeconds <= 0 ||
+        forceDangerRoomEgressReplan;
       const shouldReplanForWander =
         modeChanged ||
         blockedEvent !== null ||
@@ -1923,6 +2682,13 @@ export function createHumanManager({
         fleeGuestCount += 1;
       } else {
         wanderGuestCount += 1;
+        guestDangerResponseDebugById.set(guest.id, {
+          candidateCount: 0,
+          selectedCandidateIndex: null,
+          selectedScore: null,
+          tieBreakUsed: false,
+          failureReason: null,
+        });
       }
 
       if (
@@ -1935,10 +2701,17 @@ export function createHumanManager({
       }
 
       replansAttempted += 1;
-      if (desiredMode === "flee" && !hasThreat) {
+      if (desiredMode === "flee" && !hasDangerTarget) {
         behavior.lastPlanReason = "danger_no_target";
         behavior.objectivePathStatus = "retrying";
         behavior.objectiveFailureReason = behavior.lastPlanReason;
+        guestDangerResponseDebugById.set(guest.id, {
+          candidateCount: 0,
+          selectedCandidateIndex: null,
+          selectedScore: null,
+          tieBreakUsed: false,
+          failureReason: behavior.lastPlanReason,
+        });
         mentalPathFeedback = {
           status: "failure",
           reason: behavior.lastPlanReason,
@@ -1947,13 +2720,91 @@ export function createHumanManager({
         guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
         continue;
       }
-      if (desiredMode === "flee" && hasThreat) {
-        const guestWorld = controller.getCurrentWorldPosition();
-        const threatWorld = perception.targetWorld;
+      if (desiredMode === "flee" && hasDangerTarget) {
+        const guestWorld = currentGuestWorld;
+        const threatWorld = threatWorldForDanger;
+        const dangerRoomEgressContext = roomDangerContextForMode;
         behavior.objectiveTargetWorld = {
           x: threatWorld.x,
           y: threatWorld.y,
         };
+        if (dangerRoomEgressContext.applicable === true) {
+          const doorwayTargets = resolveRoomDoorwayTargetsForGuest(guestWorld);
+          let selectedDoorwayTarget = null;
+          let selectedDoorwayTargetIndex = null;
+          let lastDoorwayFailureReason = null;
+          for (let doorwayIndex = 0; doorwayIndex < doorwayTargets.length; doorwayIndex += 1) {
+            const doorwayTarget = doorwayTargets[doorwayIndex];
+            const assignment = assignGuestRasterPath(controller, doorwayTarget.world, {
+              occupiedSubTileKeys,
+            });
+            if (!assignment.accepted) {
+              lastDoorwayFailureReason = assignment.reason || "doorway_path_failed";
+              continue;
+            }
+            selectedDoorwayTarget = doorwayTarget;
+            selectedDoorwayTargetIndex = doorwayIndex;
+            break;
+          }
+          if (selectedDoorwayTarget) {
+            wanderState.noCandidateStreak = 0;
+            wanderState.recoveryRemainingSeconds = 0;
+            wanderState.repickCooldownRemainingSeconds = 0;
+            behavior.objectiveDispatchMode = "danger_room_egress";
+            behavior.objectiveTargetWorld = {
+              x: selectedDoorwayTarget.world.x,
+              y: selectedDoorwayTarget.world.y,
+            };
+            behavior.replanCooldownSeconds = guestFleeReplanSeconds;
+            behavior.lastPlanReason = "danger_room_egress_nearest_door";
+            behavior.objectivePathStatus = "valid";
+            guestDangerResponseDebugById.set(guest.id, {
+              candidateCount: doorwayTargets.length,
+              selectedCandidateIndex: selectedDoorwayTargetIndex,
+              selectedScore: null,
+              tieBreakUsed: false,
+              failureReason: null,
+            });
+            if (debugEnabled) {
+              guestWaypointSelectionDebugById.set(guest.id, {
+                reason: "danger_room_egress_nearest_door",
+                attempts: doorwayTargets.length,
+                candidates: doorwayTargets.map((doorwayTarget, doorwayIndex) => ({
+                  x: doorwayTarget.world.x,
+                  y: doorwayTarget.world.y,
+                  status:
+                    doorwayIndex === selectedDoorwayTargetIndex
+                      ? "expanded_selected"
+                      : "fallback_selected",
+                })),
+                candidateCount: doorwayTargets.length,
+                candidateIndex: selectedDoorwayTargetIndex,
+                tieBreakUsed: false,
+                cooldownRemainingSeconds: 0,
+                recoveryActive: false,
+              });
+            }
+            mentalPathFeedback = {
+              status: "success",
+              reason: behavior.lastPlanReason,
+            };
+            replansSucceeded += 1;
+            changed = true;
+            guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
+            continue;
+          }
+          const roomEgressFailureReason =
+            doorwayTargets.length <= 0
+              ? "danger_room_egress_no_doorway"
+              : lastDoorwayFailureReason || "danger_room_egress_path_failed";
+          guestDangerResponseDebugById.set(guest.id, {
+            candidateCount: doorwayTargets.length,
+            selectedCandidateIndex: null,
+            selectedScore: null,
+            tieBreakUsed: false,
+            failureReason: roomEgressFailureReason,
+          });
+        }
         const guestHeadingRadians = controller.getHeadingRadians();
         const fleeHeadingRadians = normalizeAngleRadians(
           Math.atan2(
@@ -1961,20 +2812,33 @@ export function createHumanManager({
             guestWorld.x - threatWorld.x
           )
         );
-        const fleeSelection = guestWanderPlanner.pickWaypointForZombie(
-          {
-            getWorldPosition: () => ({ ...guestWorld }),
-            getHeadingRadians: () => fleeHeadingRadians,
-            getVisionCone: () => controller.getVisionCone(),
-          },
-          {
-            includeDebug: debugEnabled,
-            blockedSectorsRadians: wanderState.failedSectors,
-          }
-        );
-        const normalizedFleeSelection = normalizeWaypointSelection(fleeSelection);
-        const debugSelection = normalizedFleeSelection.debug;
-        const fleeWaypoint = normalizedFleeSelection.waypoint;
+        const dangerCandidates = collectGuestDangerCandidates({
+          guestWorld,
+          fleeHeadingRadians,
+          wanderState,
+          visionCone: controller.getVisionCone(),
+        });
+        const dangerSelection = selectBestGuestDangerCandidate({
+          guestWorld,
+          threatWorld,
+          candidates: dangerCandidates,
+        });
+        const selectedDangerCandidate = dangerSelection.selected;
+        const debugSelection = selectedDangerCandidate?.plannerDebug || null;
+        const fleeWaypoint = selectedDangerCandidate?.waypoint || null;
+        const dangerResponseDebug = {
+          candidateCount: dangerCandidates.length,
+          selectedCandidateIndex: Number.isFinite(
+            selectedDangerCandidate?.candidateIndex
+          )
+            ? selectedDangerCandidate.candidateIndex
+            : null,
+          selectedScore: Number.isFinite(selectedDangerCandidate?.weightedScore)
+            ? selectedDangerCandidate.weightedScore
+            : null,
+          tieBreakUsed: dangerSelection.tieBreakUsed === true,
+          failureReason: null,
+        };
         if (fleeWaypoint) {
           const assignment = assignGuestRasterPath(controller, fleeWaypoint, {
             occupiedSubTileKeys,
@@ -1986,17 +2850,26 @@ export function createHumanManager({
             if (debugEnabled) {
               guestWaypointSelectionDebugById.set(guest.id, {
                 ...debugSelection,
+                reason: debugSelection?.reason || "danger_scored_selected",
                 wasTrimmed: assignment.pathResult?.wasTrimmed === true,
                 blockedCell: assignment.pathResult?.blockedCell
                   ? { ...assignment.pathResult.blockedCell }
                   : null,
                 pathNodeCount: assignment.pathResult?.pathWorld?.length || 0,
+                candidateCount: dangerCandidates.length,
+                candidateIndex: selectedDangerCandidate.candidateIndex,
+                weightedScore: selectedDangerCandidate.weightedScore,
+                separationGainScore: selectedDangerCandidate.separationGainScore,
+                headingAwayScore: selectedDangerCandidate.headingAwayScore,
+                losBreakScore: selectedDangerCandidate.losBreakScore,
+                tieBreakUsed: dangerSelection.tieBreakUsed === true,
                 cooldownRemainingSeconds: 0,
                 recoveryActive: false,
               });
             }
+            guestDangerResponseDebugById.set(guest.id, dangerResponseDebug);
             behavior.replanCooldownSeconds = guestFleeReplanSeconds;
-            behavior.lastPlanReason = debugSelection?.reason || "planned";
+            behavior.lastPlanReason = debugSelection?.reason || "danger_scored_selected";
             behavior.objectivePathStatus = "valid";
             mentalPathFeedback = {
               status: "success",
@@ -2005,17 +2878,29 @@ export function createHumanManager({
             replansSucceeded += 1;
             changed = true;
           } else {
+            dangerResponseDebug.failureReason =
+              assignment.reason || "rejected_by_controller";
+            guestDangerResponseDebugById.set(guest.id, dangerResponseDebug);
             registerGuestWaypointFailure(
               guest.id,
               controller,
               wanderState,
               {
-                ...buildControllerRejectedDebug(fleeSelection),
+                ...buildControllerRejectedDebug({
+                  debug: selectedDangerCandidate?.plannerDebug || null,
+                }),
                 reason: assignment.reason || "rejected_by_controller",
                 wasTrimmed: assignment.pathResult?.wasTrimmed === true,
                 blockedCell: assignment.pathResult?.blockedCell
                   ? { ...assignment.pathResult.blockedCell }
                   : null,
+                candidateCount: dangerCandidates.length,
+                candidateIndex: selectedDangerCandidate.candidateIndex,
+                weightedScore: selectedDangerCandidate.weightedScore,
+                separationGainScore: selectedDangerCandidate.separationGainScore,
+                headingAwayScore: selectedDangerCandidate.headingAwayScore,
+                losBreakScore: selectedDangerCandidate.losBreakScore,
+                tieBreakUsed: dangerSelection.tieBreakUsed === true,
               }
             );
             behavior.replanCooldownSeconds = Math.min(guestFleeReplanSeconds, 0.18);
@@ -2029,11 +2914,16 @@ export function createHumanManager({
             failedPlanCount += 1;
           }
         } else {
+          dangerResponseDebug.failureReason = "no_candidate_found";
+          guestDangerResponseDebugById.set(guest.id, dangerResponseDebug);
           registerGuestWaypointFailure(guest.id, controller, wanderState, {
-            ...debugSelection,
+            ...(debugSelection || {}),
+            reason: "no_candidate_found",
+            candidateCount: dangerCandidates.length,
+            tieBreakUsed: dangerSelection.tieBreakUsed === true,
           });
           behavior.replanCooldownSeconds = Math.min(guestFleeReplanSeconds, 0.18);
-          behavior.lastPlanReason = debugSelection?.reason || "no_candidate_found";
+          behavior.lastPlanReason = "no_candidate_found";
           behavior.objectivePathStatus = "retrying";
           behavior.objectiveFailureReason = behavior.lastPlanReason;
           mentalPathFeedback = {
@@ -2537,7 +3427,19 @@ export function createHumanManager({
                         : null,
                   }
                 : null,
+              dangerResponse:
+                guestDangerResponseDebugById.get(record.id) || {
+                  candidateCount: 0,
+                  selectedCandidateIndex: null,
+                  selectedScore: null,
+                  tieBreakUsed: false,
+                  failureReason: null,
+                },
               mentalModel: buildGuestMentalDebugSnapshot(record.id),
+              dangerMemory: buildGuestDangerMemoryDebugSnapshot(
+                record.id,
+                record.controller
+              ),
               tileKnowledge: (() => {
                 const state = guestTileKnowledgeById.get(record.id);
                 if (!state) {
@@ -2654,6 +3556,36 @@ export function createHumanManager({
           visibleTileCount: Number.isFinite(state.visibleTileCount)
             ? Math.max(0, Math.floor(state.visibleTileCount))
             : 0,
+          dangerSignal: Number.isFinite(state.dangerSignal)
+            ? state.dangerSignal
+            : 0,
+          dangerSource: state.dangerSource || "none",
+        })),
+      },
+      guestDangerMemory: {
+        enabled: true,
+        config: { ...resolvedGuestDangerPolicy },
+        lastCycle: lastGuestDangerMemoryCycle ? { ...lastGuestDangerMemoryCycle } : null,
+        byGuest: Array.from(guestDangerMemoryById.entries()).map(([id, state]) => ({
+          id,
+          ...(getGuestDangerMemoryDebugSnapshot(
+            state,
+            scene.time?.now ?? performance.now(),
+            resolvedGuestDangerPolicy,
+            humansById.get(id)?.controller?.getCurrentWorldPosition?.()
+          ) || {
+            source: "none",
+            hasLiveThreat: false,
+            liveThreatId: null,
+            liveThreatWorld: null,
+            lastKnownThreatWorld: null,
+            signalLive: 0,
+            signalRemembered: 0,
+            signalFinal: 0,
+            memoryAgeSeconds: 0,
+            expiresInSeconds: 0,
+            expired: false,
+          }),
         })),
       },
       guestBehavior: {
@@ -2680,6 +3612,14 @@ export function createHumanManager({
             : 0,
           lastPlanReason: state.lastPlanReason || null,
           targetId: state.targetId ?? null,
+          dangerResponse:
+            guestDangerResponseDebugById.get(id) || {
+              candidateCount: 0,
+              selectedCandidateIndex: null,
+              selectedScore: null,
+              tieBreakUsed: false,
+              failureReason: null,
+            },
         })),
       },
       guestConversion: {
@@ -2733,10 +3673,12 @@ export function createHumanManager({
     }
     humansById.clear();
     guestPerceptionById.clear();
+    guestDangerMemoryById.clear();
     guestBehaviorById.clear();
     guestTileKnowledgeById.clear();
     guestMentalPathFeedbackById.clear();
     guestWaypointSelectionDebugById.clear();
+    guestDangerResponseDebugById.clear();
     guestWanderStateById.clear();
     guestMentalStateById.clear();
   }
@@ -2753,6 +3695,7 @@ export function createHumanManager({
     isDebugEnabled,
     getDebugState,
     getGuestTileKnowledgeDebug,
+    reportGuestDamageDangerEvent,
     update,
     syncToView,
     destroy,

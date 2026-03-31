@@ -11,7 +11,7 @@ This phase makes guest path and waypoint behavior directly follow Phase 2 brain 
 - Draft created on **March 28, 2026**.
 - Prerequisites:
   - Phase 2 weighted mental model complete.
-  - Phase 3 danger map + weighted pathfinding complete.
+  - Phase 3 danger recognition/response complete (danger memory + local danger movement + room egress).
 
 ## Locked Decisions
 
