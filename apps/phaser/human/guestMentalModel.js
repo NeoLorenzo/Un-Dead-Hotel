@@ -541,6 +541,9 @@ const OBJECTIVE_WANDER = "wander";
 const PATH_FEEDBACK_NONE = "none";
 const PATH_FEEDBACK_SUCCESS = "success";
 const PATH_FEEDBACK_FAILURE = "failure";
+const DANGER_PRIORITY_SIGNAL_THRESHOLD = 0.05;
+const SHELTER_SATISFIED_IN_ROOM_THRESHOLD = 0.5;
+const SHELTER_SATISFIED_MAX_DANGER_SIGNAL = 0.05;
 
 function clampValue(value, minValue, maxValue) {
   return Math.max(minValue, Math.min(maxValue, value));
@@ -617,6 +620,20 @@ function sanitizePathFeedback(pathFeedback) {
 function scoreForState(scoresByState, stateId) {
   const score = Number(scoresByState?.[stateId]);
   return Number.isFinite(score) ? score : 0;
+}
+
+function isShelterObjectiveSatisfied(inputValues) {
+  const inRoom = Number(inputValues?.in_room) || 0;
+  const dangerSignal = Number(inputValues?.danger_distance_signal) || 0;
+  return (
+    inRoom >= SHELTER_SATISFIED_IN_ROOM_THRESHOLD &&
+    dangerSignal <= SHELTER_SATISFIED_MAX_DANGER_SIGNAL
+  );
+}
+
+function hasDangerPrioritySignal(inputValues) {
+  const dangerSignal = Number(inputValues?.danger_distance_signal) || 0;
+  return dangerSignal >= DANGER_PRIORITY_SIGNAL_THRESHOLD;
 }
 
 function applyFallbackFromPathFailure({
@@ -907,6 +924,10 @@ export function evaluateGuestMentalModel({
   let holdLocked = false;
   let forcedObjectiveState = null;
   let fallbackActive = false;
+  const shelterObjectiveSatisfied = isShelterObjectiveSatisfied(normalizedInputs);
+  let shelterSatisfiedOverrideApplied = false;
+  const dangerPrioritySignalActive = hasDangerPrioritySignal(normalizedInputs);
+  let dangerPriorityOverrideApplied = false;
 
   if (nextRetryRemainingSeconds > 0) {
     fallbackActive = true;
@@ -916,6 +937,20 @@ export function evaluateGuestMentalModel({
     forcedObjectiveState = pendingRetryObjectiveState;
     pendingRetryObjectiveState = null;
     arbitrationReasonCode = "fallback_retry_due";
+  }
+  if (!forcedObjectiveState && dangerPrioritySignalActive) {
+    forcedObjectiveState = OBJECTIVE_DANGER;
+    arbitrationReasonCode = "danger_priority_override";
+    dangerPriorityOverrideApplied = true;
+  }
+  if (
+    !forcedObjectiveState &&
+    shelterObjectiveSatisfied &&
+    winner.dominantState === OBJECTIVE_SHELTER
+  ) {
+    forcedObjectiveState = OBJECTIVE_WANDER;
+    arbitrationReasonCode = "shelter_satisfied";
+    shelterSatisfiedOverrideApplied = true;
   }
 
   const candidateObjective = forcedObjectiveState || winner.dominantState;
@@ -1051,6 +1086,14 @@ export function evaluateGuestMentalModel({
       retryCount: nextRetryCount,
       retryDelaySeconds,
       lastFailureReason: lastObjectiveFailureReason,
+    },
+    objectiveCompletion: {
+      shelterSatisfied: shelterObjectiveSatisfied,
+      shelterSatisfiedOverrideApplied,
+    },
+    objectivePriority: {
+      dangerPrioritySignalActive,
+      dangerPriorityOverrideApplied,
     },
     pathFeedback: {
       ...normalizedPathFeedback,

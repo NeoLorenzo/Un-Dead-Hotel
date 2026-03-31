@@ -1282,6 +1282,7 @@ function drawVisionCone(
     const mentalEvaluation = guestDebug?.mentalModel?.lastEvaluation || null;
     const dangerMemory = guestDebug?.dangerMemory || null;
     const dangerResponse = guestDebug?.dangerResponse || null;
+    const pathFeedback = guestDebug?.pathFeedback || null;
     const statusColor = resolveObjectivePathOverlayColor(status);
     const center = worldToScreen(world.x, world.y, cameraTile, tilePixels, width, height);
     const ringRadius = Math.max(7, tilePixels * 0.5);
@@ -1343,13 +1344,17 @@ function drawVisionCone(
       dangerResponse?.failureReason ||
       mentalEvaluation?.fallback?.lastFailureReason ||
       "none";
+    const objectiveReplanReasonCode =
+      objectiveIntent?.objectiveReplanReasonCode || "none";
     const previousObjective = mentalEvaluation?.previousObjectiveState || "none";
     const dangerSource = String(dangerMemory?.source || "none");
     const labelLines = [
       `Obj ${objectiveState} | Path ${status}`,
       `Transition ${previousObjective}->${objectiveState} (${transitionReasonCode})`,
       `Dispatch ${objectiveIntent.objectiveDispatchMode || "n/a"}`,
+      `Replan ${objectiveReplanReasonCode}`,
       `Plan ${status} | fail ${objectiveFailureReason}`,
+      `Feedback ${pathFeedback?.status || "none"} | reason ${pathFeedback?.reason || "none"} | dispatch ${pathFeedback?.dispatchMode || "n/a"}`,
     ];
 
     if (dangerSource !== "none" || objectiveState === "danger") {
@@ -1959,6 +1964,8 @@ function drawVisionCone(
       evaluation.fallback?.lastFailureReason ||
       evaluation.pathFeedback?.reason ||
       "none";
+    const objectiveIntent = debug?.objectiveIntent || null;
+    const movementPathFeedback = debug?.pathFeedback || null;
     const dangerMemory = debug?.dangerMemory || null;
     const dangerResponse = debug?.dangerResponse || null;
     const topContributionTerms = deriveTopDominantContributionTerms({
@@ -1989,6 +1996,16 @@ function drawVisionCone(
     lines.push(
       `Fallback: reason=${fallbackReason} | retry=${(Number(evaluation.fallback?.retryRemainingSeconds) || 0).toFixed(2)}s | count=${Math.max(0, Math.floor(Number(evaluation.fallback?.retryCount) || 0))}`
     );
+    if (objectiveIntent) {
+      lines.push(
+        `Movement: dispatch=${objectiveIntent.objectiveDispatchMode || "n/a"} | path=${objectiveIntent.objectivePathStatus || "n/a"} | replan=${objectiveIntent.objectiveReplanReasonCode || "none"} | fail=${objectiveIntent.objectiveFailureReason || "none"}`
+      );
+    }
+    if (movementPathFeedback) {
+      lines.push(
+        `Path feedback: status=${movementPathFeedback.status || "none"} | reason=${movementPathFeedback.reason || "none"} | dispatch=${movementPathFeedback.dispatchMode || "n/a"}`
+      );
+    }
     if (dangerMemory) {
       lines.push(
         `Danger signal: src=${dangerMemory.source || "none"} | final=${formatDangerSignal(

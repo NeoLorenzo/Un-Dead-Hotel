@@ -559,6 +559,15 @@ function createRuntimeScene(Phaser) {
             ? {
                 fleeReplanSeconds: 0.35,
                 wanderReplanSeconds: 1.1,
+                shelterReplanSeconds: 1.1,
+                shelterSearchRadiusTiles: 24,
+                shelterMaxRoomCandidates: 48,
+                shelterNavPaddingTiles: 14,
+                shelterMaxPathNodes: 12000,
+                objectivePlanning: {
+                  enforceBrainObjectiveAuthority: true,
+                  allowRoomDangerOverride: true,
+                },
               }
             : null;
         const guestDangerPolicy =
@@ -568,6 +577,7 @@ function createRuntimeScene(Phaser) {
                 dangerRememberedSignalMultiplier: 0.6,
                 dangerLiveDistanceMinTiles: 1.5,
                 dangerLiveDistanceMaxTiles: 8.0,
+                dangerReplanTargetShiftTiles: 1.0,
               }
             : null;
         const guestMentalModelConfig =

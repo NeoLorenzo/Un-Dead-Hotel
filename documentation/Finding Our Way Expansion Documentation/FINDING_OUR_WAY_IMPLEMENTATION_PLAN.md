@@ -14,7 +14,8 @@ Define the implementation plan for the **Finding Our Way** gameplay/AI overhaul:
 - Draft created on **March 20, 2026**.
 - Expansion Phase 1 locomotion standardization completed on **March 21, 2026**.
 - Expansion Phase 3 danger recognition and response completed on **March 31, 2026**.
-- This document now tracks remaining implementation work for Expansion Phase 2+.
+- Expansion Phase 4 brain-to-movement integration completed on **March 31, 2026**.
+- This document now tracks remaining implementation work after Phase 4 completion.
 
 ## Master Addendum (March 28, 2026)
 
@@ -31,6 +32,15 @@ Define the implementation plan for the **Finding Our Way** gameplay/AI overhaul:
   - Every mechanic must be observable in debug mode when implemented.
 - Guest memory architecture rule is locked:
   - danger memory and related runtime memory remain per-guest only.
+- Phase 4 integration scope was tightened on **March 31, 2026**:
+  - completion target is brain-to-locomotion finalization (objective authority + shelter completion + planner decoupling + feedback-loop closure),
+  - global influence-map revival and weighted traversal rollout are explicitly deferred out of Phase 4.
+- Phase 4 completion outcomes recorded on **March 31, 2026**:
+  - objective dispatch contract and path-feedback loop shipped,
+  - shelter objective finalized with safe-zone targeting and completion handoff,
+  - danger objective priority over shelter/wander enforced,
+  - shelter excludes danger-marked rooms from candidate targets,
+  - guest planning decoupled from zombie wander planner.
 
 ## Expansion Sequencing Update (Locked)
 
@@ -246,8 +256,8 @@ The following two constraints are copied verbatim and are implementation-critica
 - [ ] Danger memory expiry/decay rule locked.
 - [x] Danger memory ownership locked as per-guest only (no shared guest memory).
 - [ ] Utility baseline weights and danger growth/decay curves locked.
-- [ ] Safe-zone definition locked (room center, room interior sample, or tagged nodes).
-- [ ] Shelter completion behavior locked (idle in room, patrol inside room, or timed reevaluate).
+- [x] Safe-zone definition locked (deterministic nearest walkable room-anchor policy).
+- [x] Shelter completion behavior locked (brain arbitration hands shelter to wander when in-room and low-danger).
 
 ## Questions To Resolve (Must Be Answered)
 
@@ -257,7 +267,7 @@ The following two constraints are copied verbatim and are implementation-critica
 4. What exact danger growth function should be used when zombie is visible (distance-only, LOS-duration-only, or combined)?
 5. What exact danger decay and memory expiry timing should apply after LOS is lost?
 6. Resolved on March 28, 2026: danger points are per-guest memory only (no shared guest memory model).
-7. What precise safe-zone anchor should `seek_shelter` target (room center, nearest room-floor tile, doorway-adjacent tile, or another rule)?
-8. When a guest reaches shelter, should they idle in place, wander within shelter bounds, or immediately seek a deeper interior point?
+7. Resolved on March 31, 2026: `seek_shelter` targets deterministic nearest walkable room anchors from guest safe-zone index.
+8. Resolved on March 31, 2026: shelter completion transitions by brain arbitration (`shelter_satisfied` -> `wander`) when in-room and low-danger.
 9. Should survivor pathfinding remain unweighted, or optionally use influence-map weights in a future phase?
 10. Do we keep current guest conversion-on-touch exactly as-is during this overhaul, or add any conversion cooldown/guard rules?

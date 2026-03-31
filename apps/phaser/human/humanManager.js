@@ -11,8 +11,16 @@ import {
   getGuestDangerMemoryDebugSnapshot,
   updateGuestDangerMemoryFromPerception,
 } from "./guestDangerMemory.js";
+import {
+  createGuestObjectivePlanningPolicy,
+  dispatchDangerObjectivePlan,
+  createObjectivePathFeedbackEnvelope,
+  dispatchObjectivePlan,
+} from "./guestObjectivePlanner.js";
+import { createGuestSafeZoneIndex } from "./guestSafeZoneIndex.js";
+import { createGuestWanderPlanner } from "./guestWanderPlanner.js";
 import { createHumanPerception } from "./humanPerception.js";
-import { createZombieWanderPlanner } from "../zombie/zombieWanderPlanner.js";
+import { createSubTilePathfinder } from "../../../engine/world/subTilePathfinder.js";
 import {
   buildOccupiedSubTileKeysFromWorldPoints,
   rasterizeSubTileLine,
@@ -50,6 +58,12 @@ const DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_SEPARATION = 0.55;
 const DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_HEADING_AWAY = 0.25;
 const DEFAULT_GUEST_DANGER_CANDIDATE_WEIGHT_LOS_BREAK = 0.2;
 const DEFAULT_GUEST_DANGER_LINE_CHECK_STEP_TILES = 0.2;
+const DEFAULT_GUEST_DANGER_REPLAN_TARGET_SHIFT_TILES = 1.0;
+const DEFAULT_GUEST_SHELTER_REPLAN_SECONDS = 1.1;
+const DEFAULT_GUEST_SHELTER_SEARCH_RADIUS_TILES = 24;
+const DEFAULT_GUEST_SHELTER_MAX_ROOM_CANDIDATES = 48;
+const DEFAULT_GUEST_SHELTER_NAV_PADDING_TILES = 14;
+const DEFAULT_GUEST_SHELTER_MAX_PATH_NODES = 12000;
 const DEFAULT_GUEST_TILE_KNOWLEDGE_SAMPLE_RADIUS_TILES = 6;
 const MAX_GUEST_TILE_KNOWLEDGE_DEBUG_SAMPLE_TILES = 1024;
 const LOCOMOTION_SUB_TILE_SIZE_TILES = 0.25;
@@ -322,6 +336,11 @@ export function createHumanManager({
       Number(guestDangerPolicy?.dangerLineCheckStepTiles) ||
         DEFAULT_GUEST_DANGER_LINE_CHECK_STEP_TILES
     ),
+    dangerReplanTargetShiftTiles: Math.max(
+      0.05,
+      Number(guestDangerPolicy?.dangerReplanTargetShiftTiles) ||
+        DEFAULT_GUEST_DANGER_REPLAN_TARGET_SHIFT_TILES
+    ),
   };
   resolvedGuestDangerPolicy.dangerLiveDistanceMaxTiles = Math.max(
     resolvedGuestDangerPolicy.dangerLiveDistanceMinTiles + 0.01,
@@ -382,8 +401,9 @@ export function createHumanManager({
           }),
       })
     : null;
-  const guestWanderPlanner = createZombieWanderPlanner({
+  const guestWanderPlanner = createGuestWanderPlanner({
     runtime,
+    agentRadiusTiles: HUMAN_COLLIDER_RADIUS_TILES,
     ...(guestBehaviorPolicy?.wanderPlanner || {}),
     coneClipRayCount: Math.max(
       1,
@@ -433,8 +453,53 @@ export function createHumanManager({
     Number(guestBehaviorPolicy?.wanderNoCandidateRepickCooldownSeconds) ||
       DEFAULT_GUEST_WANDER_NO_CANDIDATE_REPICK_COOLDOWN_SECONDS
   );
+  const resolvedGuestObjectivePlanningPolicy =
+    createGuestObjectivePlanningPolicy(
+      guestBehaviorPolicy?.objectivePlanning || null
+    );
+  const resolvedGuestShelterPolicy = {
+    replanSeconds: Math.max(
+      0.05,
+      Number(guestBehaviorPolicy?.shelterReplanSeconds) ||
+        DEFAULT_GUEST_SHELTER_REPLAN_SECONDS
+    ),
+    searchRadiusTiles: Math.max(
+      4,
+      Math.floor(
+        Number(guestBehaviorPolicy?.shelterSearchRadiusTiles) ||
+          DEFAULT_GUEST_SHELTER_SEARCH_RADIUS_TILES
+      )
+    ),
+    maxRoomCandidates: Math.max(
+      1,
+      Math.floor(
+        Number(guestBehaviorPolicy?.shelterMaxRoomCandidates) ||
+          DEFAULT_GUEST_SHELTER_MAX_ROOM_CANDIDATES
+      )
+    ),
+    navPaddingTiles: Math.max(
+      2,
+      Number(guestBehaviorPolicy?.shelterNavPaddingTiles) ||
+        DEFAULT_GUEST_SHELTER_NAV_PADDING_TILES
+    ),
+    maxPathNodes: Math.max(
+      256,
+      Math.floor(
+        Number(guestBehaviorPolicy?.shelterMaxPathNodes) ||
+          DEFAULT_GUEST_SHELTER_MAX_PATH_NODES
+      )
+    ),
+  };
+  const guestSafeZoneIndex = createGuestSafeZoneIndex({
+    runtime,
+    searchRadiusTiles: resolvedGuestShelterPolicy.searchRadiusTiles,
+    agentRadiusTiles: HUMAN_COLLIDER_RADIUS_TILES,
+    maxRoomCandidates: resolvedGuestShelterPolicy.maxRoomCandidates,
+  });
+  const guestShelterPathfinder = createSubTilePathfinder();
   const guestBehaviorById = new Map();
   const guestMentalPathFeedbackById = new Map();
+  const guestObjectivePathFeedbackById = new Map();
   const guestWaypointSelectionDebugById = new Map();
   const guestDangerResponseDebugById = new Map();
   const guestWanderStateById = new Map();
@@ -520,6 +585,77 @@ export function createHumanManager({
     return {
       accepted,
       reason: accepted ? "planned" : "rejected_by_controller",
+      pathResult,
+    };
+  }
+
+  function assignGuestShelterPath(controller, targetWorld, options = {}) {
+    if (!controller || !targetWorld) {
+      return {
+        accepted: false,
+        reason: "shelter_invalid_target",
+        pathResult: null,
+      };
+    }
+    const startWorld = controller.getCurrentWorldPosition?.();
+    if (!isFiniteNumber(startWorld?.x) || !isFiniteNumber(startWorld?.y)) {
+      return {
+        accepted: false,
+        reason: "shelter_invalid_start",
+        pathResult: null,
+      };
+    }
+    const goalWorld = normalizeWorldPoint(targetWorld);
+    const navPaddingTiles = Math.max(
+      2,
+      Number(options?.navPaddingTiles) || resolvedGuestShelterPolicy.navPaddingTiles
+    );
+    const maxPathNodes = Math.max(
+      256,
+      Math.floor(Number(options?.maxPathNodes) || resolvedGuestShelterPolicy.maxPathNodes)
+    );
+    const navigationGrid = runtime.buildSubTileNavigationGrid({
+      minWorldX: Math.min(startWorld.x, goalWorld.x) - navPaddingTiles,
+      minWorldY: Math.min(startWorld.y, goalWorld.y) - navPaddingTiles,
+      maxWorldX: Math.max(startWorld.x, goalWorld.x) + navPaddingTiles,
+      maxWorldY: Math.max(startWorld.y, goalWorld.y) + navPaddingTiles,
+      cellSizeTiles: LOCOMOTION_SUB_TILE_SIZE_TILES,
+      agentRadiusTiles: HUMAN_COLLIDER_RADIUS_TILES,
+    });
+    const pathResult = guestShelterPathfinder.findPath({
+      startWorld,
+      goalWorld,
+      navigationGrid,
+      maxNodes: maxPathNodes,
+      includeDebug: false,
+    });
+    if (pathResult?.status !== "found" || !Array.isArray(pathResult?.path)) {
+      const clipped = pathResult?.searchStats?.domainClipped === true;
+      let failureReason = "shelter_path_no_path";
+      if (pathResult?.status === "blocked") {
+        failureReason = "shelter_path_blocked";
+      } else if (pathResult?.status === "budget_exceeded") {
+        failureReason = "shelter_path_budget_exceeded";
+      } else if (clipped) {
+        failureReason = "shelter_path_domain_clipped";
+      }
+      return {
+        accepted: false,
+        reason: failureReason,
+        pathResult,
+      };
+    }
+    if (pathResult.path.length <= 0) {
+      return {
+        accepted: false,
+        reason: "shelter_empty_path",
+        pathResult,
+      };
+    }
+    const accepted = controller.setWorldPath(pathResult.path);
+    return {
+      accepted,
+      reason: accepted ? "shelter_path_assigned" : "shelter_rejected_by_controller",
       pathResult,
     };
   }
@@ -769,6 +905,7 @@ export function createHumanManager({
     guestBehaviorById.delete(guestId);
     guestTileKnowledgeById.delete(guestId);
     guestMentalPathFeedbackById.delete(guestId);
+    guestObjectivePathFeedbackById.delete(guestId);
     guestWaypointSelectionDebugById.delete(guestId);
     guestDangerResponseDebugById.delete(guestId);
     guestWanderStateById.delete(guestId);
@@ -1024,6 +1161,7 @@ export function createHumanManager({
     guestBehaviorById.delete(humanId);
     guestTileKnowledgeById.delete(humanId);
     guestMentalPathFeedbackById.delete(humanId);
+    guestObjectivePathFeedbackById.delete(humanId);
     guestWaypointSelectionDebugById.delete(humanId);
     guestDangerResponseDebugById.delete(humanId);
     guestWanderStateById.delete(humanId);
@@ -1484,6 +1622,7 @@ export function createHumanManager({
         objectiveState: "wander",
         objectiveDispatchMode: "wander",
         objectiveReasonCode: null,
+        objectiveReplanReasonCode: null,
         objectivePathStatus: "idle",
         objectiveFailureReason: null,
         objectiveTargetWorld: null,
@@ -1948,6 +2087,11 @@ export function createHumanManager({
         guestMentalPathFeedbackById.delete(humanId);
       }
     }
+    for (const [humanId] of guestObjectivePathFeedbackById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestObjectivePathFeedbackById.delete(humanId);
+      }
+    }
     for (const [humanId] of guestDangerResponseDebugById.entries()) {
       if (!activeGuestIds.has(humanId)) {
         guestDangerResponseDebugById.delete(humanId);
@@ -2158,9 +2302,9 @@ export function createHumanManager({
     const candidates = [];
     const seenWaypointKeys = new Set();
     for (let i = 0; i < sampleCount; i += 1) {
-      const selection = guestWanderPlanner.pickWaypointForZombie(
+      const selection = guestWanderPlanner.pickWaypointForGuest(
         {
-          getWorldPosition: () => ({ ...guestWorld }),
+          getCurrentWorldPosition: () => ({ ...guestWorld }),
           getHeadingRadians: () => fleeHeadingRadians,
           getVisionCone: () => visionCone || { angleDegrees: 90, rangeTiles: 8 },
         },
@@ -2441,6 +2585,46 @@ export function createHumanManager({
     };
   }
 
+  function resolveDangerMarkedRoomKeysForGuest({
+    guestId = null,
+    perceptionState = null,
+  } = {}) {
+    const dangerSource = String(perceptionState?.dangerSource || "none");
+    if (dangerSource === "none" || guestId == null) {
+      return new Set();
+    }
+    if (typeof runtime?.getRoomTilesAtWorld !== "function") {
+      return new Set();
+    }
+    const memoryState = guestDangerMemoryById.get(guestId) || null;
+    if (!memoryState) {
+      return new Set();
+    }
+    const markedRoomKeys = new Set();
+    const candidateThreatWorlds = [];
+    if (
+      dangerSource === "live" &&
+      Number.isFinite(memoryState?.liveThreatWorld?.x) &&
+      Number.isFinite(memoryState?.liveThreatWorld?.y)
+    ) {
+      candidateThreatWorlds.push(memoryState.liveThreatWorld);
+    }
+    if (
+      Number.isFinite(memoryState?.lastKnownThreatWorld?.x) &&
+      Number.isFinite(memoryState?.lastKnownThreatWorld?.y)
+    ) {
+      candidateThreatWorlds.push(memoryState.lastKnownThreatWorld);
+    }
+    for (const threatWorld of candidateThreatWorlds) {
+      const roomData = runtime.getRoomTilesAtWorld(threatWorld.x, threatWorld.y);
+      const roomKey = String(roomData?.roomKey || "");
+      if (roomKey.length > 0) {
+        markedRoomKeys.add(roomKey);
+      }
+    }
+    return markedRoomKeys;
+  }
+
   function runGuestBehaviorStep(dtSeconds, { recordCycle = true } = {}) {
     function registerGuestWaypointFailure(
       guestId,
@@ -2494,6 +2678,134 @@ export function createHumanManager({
       };
     }
 
+    function isStoredObjectiveTargetValidForMode(mode, targetWorld) {
+      if (
+        !isFiniteNumber(targetWorld?.x) ||
+        !isFiniteNumber(targetWorld?.y)
+      ) {
+        return false;
+      }
+      if (!isWalkableWorldPoint(targetWorld.x, targetWorld.y)) {
+        return false;
+      }
+      if (mode !== "shelter") {
+        return true;
+      }
+      const area = runtime.classifyAreaAtWorld(targetWorld.x, targetWorld.y);
+      return area?.inRoom === true || area?.doorwayTreatedAsRoom === true;
+    }
+
+    function resolveGuestReplanDecision({
+      desiredMode,
+      modeChanged,
+      blockedEvent,
+      hasActivePath,
+      cooldownExpired,
+      dispatchModeChanged,
+      targetInvalid,
+      dangerTargetShifted,
+    }) {
+      if (modeChanged) {
+        return {
+          shouldReplan: true,
+          reasonCode: "objective_mode_changed",
+        };
+      }
+      if (blockedEvent != null) {
+        return {
+          shouldReplan: true,
+          reasonCode: "path_blocked_event",
+        };
+      }
+      if (dispatchModeChanged === true) {
+        return {
+          shouldReplan: true,
+          reasonCode: "dispatch_mode_changed",
+        };
+      }
+      if (targetInvalid === true) {
+        return {
+          shouldReplan: true,
+          reasonCode: "objective_target_invalid",
+        };
+      }
+      if (dangerTargetShifted === true) {
+        return {
+          shouldReplan: true,
+          reasonCode: "danger_target_shifted",
+        };
+      }
+      if (!hasActivePath) {
+        return {
+          shouldReplan: true,
+          reasonCode: "path_missing",
+        };
+      }
+      if (
+        cooldownExpired === true &&
+        (desiredMode === "flee" || desiredMode === "shelter")
+      ) {
+        return {
+          shouldReplan: true,
+          reasonCode: "replan_cooldown_elapsed",
+        };
+      }
+      return {
+        shouldReplan: false,
+        reasonCode: "none",
+      };
+    }
+
+    function recordGuestObjectivePathFeedback(
+      guestId,
+      pathFeedback,
+      behaviorState = null
+    ) {
+      const envelope = createObjectivePathFeedbackEnvelope({
+        status: pathFeedback?.status,
+        reason: pathFeedback?.reason,
+        objectiveState: behaviorState?.objectiveState || null,
+        dispatchMode: behaviorState?.objectiveDispatchMode || null,
+        targetWorld: behaviorState?.objectiveTargetWorld || null,
+      });
+      const dispatchMode = String(behaviorState?.objectiveDispatchMode || "unknown");
+      if (dispatchMode === "wander") {
+        dispatchModeCounts.wander += 1;
+      } else if (dispatchMode === "shelter") {
+        dispatchModeCounts.shelter += 1;
+      } else if (dispatchMode === "danger_flee") {
+        dispatchModeCounts.danger_flee += 1;
+      } else if (dispatchMode === "danger_room_egress") {
+        dispatchModeCounts.danger_room_egress += 1;
+      } else {
+        dispatchModeCounts.unknown += 1;
+      }
+      const pathStatus = String(behaviorState?.objectivePathStatus || "unknown");
+      if (pathStatus === "idle") {
+        pathStatusCounts.idle += 1;
+      } else if (pathStatus === "valid") {
+        pathStatusCounts.valid += 1;
+      } else if (pathStatus === "following_path") {
+        pathStatusCounts.following_path += 1;
+      } else if (pathStatus === "retrying") {
+        pathStatusCounts.retrying += 1;
+      } else {
+        pathStatusCounts.unknown += 1;
+      }
+      const feedbackStatus = String(envelope.status || "unknown");
+      if (feedbackStatus === "none") {
+        pathFeedbackStatusCounts.none += 1;
+      } else if (feedbackStatus === "success") {
+        pathFeedbackStatusCounts.success += 1;
+      } else if (feedbackStatus === "failure") {
+        pathFeedbackStatusCounts.failure += 1;
+      } else {
+        pathFeedbackStatusCounts.unknown += 1;
+      }
+      guestMentalPathFeedbackById.set(guestId, envelope);
+      guestObjectivePathFeedbackById.set(guestId, envelope);
+    }
+
     const guests = getHumanEntries({ livingOnly: true }).filter(
       (entry) => entry.role === ROLE_GUEST
     );
@@ -2502,6 +2814,7 @@ export function createHumanManager({
     const activeGuestIds = new Set(guests.map((entry) => entry.id));
     let changed = false;
     let fleeGuestCount = 0;
+    let shelterGuestCount = 0;
     let wanderGuestCount = 0;
     let shelterIntentGuestCount = 0;
     let dangerIntentGuestCount = 0;
@@ -2509,6 +2822,37 @@ export function createHumanManager({
     let replansAttempted = 0;
     let replansSucceeded = 0;
     let failedPlanCount = 0;
+    const dispatchModeCounts = {
+      wander: 0,
+      shelter: 0,
+      danger_flee: 0,
+      danger_room_egress: 0,
+      unknown: 0,
+    };
+    const pathStatusCounts = {
+      idle: 0,
+      valid: 0,
+      following_path: 0,
+      retrying: 0,
+      unknown: 0,
+    };
+    const pathFeedbackStatusCounts = {
+      none: 0,
+      success: 0,
+      failure: 0,
+      unknown: 0,
+    };
+    const shelterResolutionStats = {
+      attempted: 0,
+      resolvedTarget: 0,
+      pathAssigned: 0,
+      failed: 0,
+      noSafeZone: 0,
+      pathFailed: 0,
+      rejectedByController: 0,
+      failureReasonCounts: {},
+    };
+    const replanReasonCounts = {};
 
     for (const [humanId] of guestBehaviorById.entries()) {
       if (!activeGuestIds.has(humanId)) {
@@ -2535,6 +2879,11 @@ export function createHumanManager({
         guestMentalPathFeedbackById.delete(humanId);
       }
     }
+    for (const [humanId] of guestObjectivePathFeedbackById.entries()) {
+      if (!activeGuestIds.has(humanId)) {
+        guestObjectivePathFeedbackById.delete(humanId);
+      }
+    }
 
     const dt = Math.max(0, Number(dtSeconds) || 0);
     for (const guest of guests) {
@@ -2550,7 +2899,7 @@ export function createHumanManager({
         typeof controller?.setWorldPath !== "function" ||
         typeof controller?.hasWaypoint !== "function"
       ) {
-        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
+        recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, null);
         continue;
       }
       const wanderState = getGuestWanderState(guest.id);
@@ -2565,13 +2914,16 @@ export function createHumanManager({
         perception?.detected === true &&
         Number.isFinite(perception?.targetWorld?.x) &&
         Number.isFinite(perception?.targetWorld?.y);
-      const rememberedThreatWorld = normalizeWorldPoint(
-        guestDangerMemoryById.get(guest.id)?.lastKnownThreatWorld
-      );
+      const rememberedThreatRaw =
+        guestDangerMemoryById.get(guest.id)?.lastKnownThreatWorld || null;
+      const rememberedThreatWorld =
+        Number.isFinite(rememberedThreatRaw?.x) &&
+        Number.isFinite(rememberedThreatRaw?.y)
+          ? normalizeWorldPoint(rememberedThreatRaw)
+          : null;
       const threatWorldForDanger = hasLiveThreat
         ? perception.targetWorld
-        : Number.isFinite(rememberedThreatWorld?.x) &&
-            Number.isFinite(rememberedThreatWorld?.y)
+        : rememberedThreatWorld
           ? rememberedThreatWorld
           : null;
       const hasDangerTarget =
@@ -2593,21 +2945,22 @@ export function createHumanManager({
         mentalEvaluation?.objectiveState ||
         mentalEvaluation?.dominantState ||
         "wander";
-      const objectiveStateFromBrain =
-        objectiveStateRawFromBrain === "danger" ||
-        objectiveStateRawFromBrain === "shelter" ||
-        objectiveStateRawFromBrain === "wander"
-          ? objectiveStateRawFromBrain
-          : "wander";
+      const objectiveStateFromBrain = objectiveStateRawFromBrain;
       const hasActiveDangerSource =
         String(perception?.dangerSource || "none") !== "none" || hasDangerTarget;
       const roomDangerOverrideActive =
-        objectiveStateFromBrain !== "danger" &&
         roomDangerContextForMode.applicable === true &&
         hasActiveDangerSource;
-      const objectiveState = roomDangerOverrideActive
-        ? "danger"
-        : objectiveStateFromBrain;
+      const behavior = getGuestBehaviorState(guest.id);
+      const objectivePlan = dispatchObjectivePlan({
+        brainObjectiveState: objectiveStateFromBrain,
+        hasDangerTarget,
+        roomDangerOverrideActive,
+        arbitrationReasonCode: mentalEvaluation?.arbitrationReasonCode || null,
+        lastPlanReason: behavior?.lastPlanReason || null,
+        policy: resolvedGuestObjectivePlanningPolicy,
+      });
+      const objectiveState = objectivePlan.objectiveState;
       if (objectiveState === "danger") {
         dangerIntentGuestCount += 1;
       } else if (objectiveState === "shelter") {
@@ -2615,8 +2968,7 @@ export function createHumanManager({
       } else {
         wanderIntentGuestCount += 1;
       }
-      const desiredMode = objectiveState === "danger" ? "flee" : "wander";
-      const behavior = getGuestBehaviorState(guest.id);
+      const desiredMode = objectivePlan.desiredMode;
       if (!guestDangerResponseDebugById.has(guest.id)) {
         guestDangerResponseDebugById.set(guest.id, {
           candidateCount: 0,
@@ -2627,19 +2979,10 @@ export function createHumanManager({
         });
       }
       behavior.objectiveState = objectiveState;
-      behavior.objectiveDispatchMode =
-        objectiveState === "danger"
-          ? behavior.lastPlanReason === "danger_room_egress_nearest_door"
-            ? "danger_room_egress"
-            : "danger_flee"
-          : objectiveState === "shelter"
-            ? "shelter_proxy_wander"
-            : "wander";
-      behavior.objectiveReasonCode = roomDangerOverrideActive
-        ? "room_danger_override"
-        : mentalEvaluation?.arbitrationReasonCode || null;
+      behavior.objectiveDispatchMode = objectivePlan.objectiveDispatchMode;
+      behavior.objectiveReasonCode = objectivePlan.objectiveReasonCode;
+      behavior.objectiveReplanReasonCode = null;
       behavior.objectiveFailureReason = null;
-      behavior.objectiveTargetWorld = null;
       behavior.replanCooldownSeconds = Math.max(0, behavior.replanCooldownSeconds - dt);
       const blockedEvent =
         typeof controller.consumePathBlockedEvent === "function"
@@ -2648,6 +2991,7 @@ export function createHumanManager({
       const modeChanged = behavior.mode !== desiredMode;
       if (modeChanged) {
         behavior.mode = desiredMode;
+        behavior.objectiveTargetWorld = null;
         behavior.replanCooldownSeconds = 0;
         if (debugEnabled && desiredMode === "flee") {
           guestWaypointSelectionDebugById.set(guest.id, {
@@ -2667,19 +3011,45 @@ export function createHumanManager({
       }
 
       const hasActivePath = controller.hasWaypoint();
-      const shouldReplanForFlee =
-        modeChanged ||
-        blockedEvent !== null ||
-        !hasActivePath ||
-        behavior.replanCooldownSeconds <= 0 ||
-        forceDangerRoomEgressReplan;
-      const shouldReplanForWander =
-        modeChanged ||
-        blockedEvent !== null ||
-        !hasActivePath;
+      const storedTargetWorld = behavior.objectiveTargetWorld;
+      const hasStoredTarget =
+        isFiniteNumber(storedTargetWorld?.x) &&
+        isFiniteNumber(storedTargetWorld?.y);
+      const targetInvalid =
+        hasStoredTarget &&
+        (desiredMode === "wander" || desiredMode === "shelter") &&
+        !isStoredObjectiveTargetValidForMode(desiredMode, storedTargetWorld);
+      const dangerTargetShifted =
+        desiredMode === "flee" &&
+        hasDangerTarget &&
+        behavior.objectiveDispatchMode !== "danger_room_egress" &&
+        hasStoredTarget &&
+        Math.hypot(
+          storedTargetWorld.x - threatWorldForDanger.x,
+          storedTargetWorld.y - threatWorldForDanger.y
+        ) >= resolvedGuestDangerPolicy.dangerReplanTargetShiftTiles;
+      const replanDecision = resolveGuestReplanDecision({
+        desiredMode,
+        modeChanged,
+        blockedEvent,
+        hasActivePath,
+        cooldownExpired: behavior.replanCooldownSeconds <= 0,
+        dispatchModeChanged: forceDangerRoomEgressReplan,
+        targetInvalid,
+        dangerTargetShifted,
+      });
 
       if (desiredMode === "flee") {
         fleeGuestCount += 1;
+      } else if (desiredMode === "shelter") {
+        shelterGuestCount += 1;
+        guestDangerResponseDebugById.set(guest.id, {
+          candidateCount: 0,
+          selectedCandidateIndex: null,
+          selectedScore: null,
+          tieBreakUsed: false,
+          failureReason: null,
+        });
       } else {
         wanderGuestCount += 1;
         guestDangerResponseDebugById.set(guest.id, {
@@ -2691,44 +3061,49 @@ export function createHumanManager({
         });
       }
 
-      if (
-        (desiredMode === "flee" && !shouldReplanForFlee) ||
-        (desiredMode === "wander" && !shouldReplanForWander)
-      ) {
+      if (!replanDecision.shouldReplan) {
         behavior.objectivePathStatus = hasActivePath ? "following_path" : "idle";
-        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
+        recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, behavior);
         continue;
       }
 
+      behavior.objectiveReplanReasonCode = replanDecision.reasonCode;
       replansAttempted += 1;
-      if (desiredMode === "flee" && !hasDangerTarget) {
-        behavior.lastPlanReason = "danger_no_target";
-        behavior.objectivePathStatus = "retrying";
-        behavior.objectiveFailureReason = behavior.lastPlanReason;
-        guestDangerResponseDebugById.set(guest.id, {
-          candidateCount: 0,
-          selectedCandidateIndex: null,
-          selectedScore: null,
-          tieBreakUsed: false,
-          failureReason: behavior.lastPlanReason,
+      replanReasonCounts[replanDecision.reasonCode] =
+        (Number(replanReasonCounts[replanDecision.reasonCode]) || 0) + 1;
+      if (desiredMode === "flee") {
+        const dangerDispatch = dispatchDangerObjectivePlan({
+          hasDangerTarget,
+          threatWorld: threatWorldForDanger,
+          roomDangerApplicable: roomDangerContextForMode.applicable === true,
         });
-        mentalPathFeedback = {
-          status: "failure",
-          reason: behavior.lastPlanReason,
-        };
-        failedPlanCount += 1;
-        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
-        continue;
-      }
-      if (desiredMode === "flee" && hasDangerTarget) {
+        if (!dangerDispatch.accepted) {
+          behavior.lastPlanReason = dangerDispatch.reason || "danger_no_target";
+          behavior.objectivePathStatus = "retrying";
+          behavior.objectiveFailureReason = behavior.lastPlanReason;
+          guestDangerResponseDebugById.set(guest.id, {
+            candidateCount: 0,
+            selectedCandidateIndex: null,
+            selectedScore: null,
+            tieBreakUsed: false,
+            failureReason: behavior.lastPlanReason,
+          });
+          mentalPathFeedback = {
+            status: "failure",
+            reason: behavior.lastPlanReason,
+          };
+          failedPlanCount += 1;
+          recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, behavior);
+          continue;
+        }
         const guestWorld = currentGuestWorld;
-        const threatWorld = threatWorldForDanger;
-        const dangerRoomEgressContext = roomDangerContextForMode;
+        const threatWorld = dangerDispatch.targetWorld;
+        behavior.objectiveDispatchMode = dangerDispatch.strategy;
         behavior.objectiveTargetWorld = {
           x: threatWorld.x,
           y: threatWorld.y,
         };
-        if (dangerRoomEgressContext.applicable === true) {
+        if (dangerDispatch.strategy === "danger_room_egress") {
           const doorwayTargets = resolveRoomDoorwayTargetsForGuest(guestWorld);
           let selectedDoorwayTarget = null;
           let selectedDoorwayTargetIndex = null;
@@ -2790,7 +3165,7 @@ export function createHumanManager({
             };
             replansSucceeded += 1;
             changed = true;
-            guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
+            recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, behavior);
             continue;
           }
           const roomEgressFailureReason =
@@ -2804,8 +3179,8 @@ export function createHumanManager({
             tieBreakUsed: false,
             failureReason: roomEgressFailureReason,
           });
+          behavior.objectiveDispatchMode = "danger_flee";
         }
-        const guestHeadingRadians = controller.getHeadingRadians();
         const fleeHeadingRadians = normalizeAngleRadians(
           Math.atan2(
             guestWorld.y - threatWorld.y,
@@ -2932,7 +3307,100 @@ export function createHumanManager({
           };
           failedPlanCount += 1;
         }
-        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
+        recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, behavior);
+        continue;
+      }
+      if (desiredMode === "shelter") {
+        shelterResolutionStats.attempted += 1;
+        const excludedShelterRoomKeys = resolveDangerMarkedRoomKeysForGuest({
+          guestId: guest.id,
+          perceptionState: perception,
+        });
+        const shelterResolution = guestSafeZoneIndex.findNearestSafeZoneAnchor({
+          guestWorld: currentGuestWorld,
+          maxSearchRadiusTiles: resolvedGuestShelterPolicy.searchRadiusTiles,
+          excludedRoomKeys: excludedShelterRoomKeys,
+        });
+        const shelterTarget = shelterResolution?.selected?.anchorWorld || null;
+        if (
+          !Number.isFinite(shelterTarget?.x) ||
+          !Number.isFinite(shelterTarget?.y)
+        ) {
+          behavior.replanCooldownSeconds = Math.min(
+            resolvedGuestShelterPolicy.replanSeconds,
+            0.25
+          );
+          behavior.lastPlanReason =
+            shelterResolution?.reason || "shelter_no_safe_zone_found";
+          shelterResolutionStats.failed += 1;
+          shelterResolutionStats.noSafeZone += 1;
+          shelterResolutionStats.failureReasonCounts[behavior.lastPlanReason] =
+            (Number(
+              shelterResolutionStats.failureReasonCounts[behavior.lastPlanReason]
+            ) || 0) + 1;
+          behavior.objectivePathStatus = "retrying";
+          behavior.objectiveFailureReason = behavior.lastPlanReason;
+          mentalPathFeedback = {
+            status: "failure",
+            reason: behavior.lastPlanReason,
+          };
+          failedPlanCount += 1;
+          recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, behavior);
+          continue;
+        }
+        shelterResolutionStats.resolvedTarget += 1;
+        behavior.objectiveTargetWorld = {
+          x: shelterTarget.x,
+          y: shelterTarget.y,
+        };
+        const shelterAssignment = assignGuestShelterPath(
+          controller,
+          shelterTarget,
+          {
+            navPaddingTiles: resolvedGuestShelterPolicy.navPaddingTiles,
+            maxPathNodes: resolvedGuestShelterPolicy.maxPathNodes,
+          }
+        );
+        if (shelterAssignment.accepted) {
+          wanderState.noCandidateStreak = 0;
+          wanderState.recoveryRemainingSeconds = 0;
+          wanderState.repickCooldownRemainingSeconds = 0;
+          shelterResolutionStats.pathAssigned += 1;
+          behavior.replanCooldownSeconds = resolvedGuestShelterPolicy.replanSeconds;
+          behavior.lastPlanReason = "shelter_nearest_safe_zone";
+          behavior.objectivePathStatus = "valid";
+          mentalPathFeedback = {
+            status: "success",
+            reason: behavior.lastPlanReason,
+          };
+          replansSucceeded += 1;
+          changed = true;
+        } else {
+          behavior.replanCooldownSeconds = Math.min(
+            resolvedGuestShelterPolicy.replanSeconds,
+            0.25
+          );
+          behavior.lastPlanReason =
+            shelterAssignment.reason || "shelter_path_failed";
+          shelterResolutionStats.failed += 1;
+          if (behavior.lastPlanReason === "shelter_rejected_by_controller") {
+            shelterResolutionStats.rejectedByController += 1;
+          } else {
+            shelterResolutionStats.pathFailed += 1;
+          }
+          shelterResolutionStats.failureReasonCounts[behavior.lastPlanReason] =
+            (Number(
+              shelterResolutionStats.failureReasonCounts[behavior.lastPlanReason]
+            ) || 0) + 1;
+          behavior.objectivePathStatus = "retrying";
+          behavior.objectiveFailureReason = behavior.lastPlanReason;
+          mentalPathFeedback = {
+            status: "failure",
+            reason: behavior.lastPlanReason,
+          };
+          failedPlanCount += 1;
+        }
+        recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, behavior);
         continue;
       }
 
@@ -2941,11 +3409,11 @@ export function createHumanManager({
         behavior.lastPlanReason = "repick_cooldown";
         behavior.objectivePathStatus = "retrying";
         behavior.objectiveFailureReason = behavior.lastPlanReason;
-        guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
+        recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, behavior);
         continue;
       }
 
-      const selection = guestWanderPlanner.pickWaypointForZombie(controller, {
+      const selection = guestWanderPlanner.pickWaypointForGuest(controller, {
         includeDebug: debugEnabled,
         blockedSectorsRadians: wanderState.failedSectors,
       });
@@ -3020,7 +3488,7 @@ export function createHumanManager({
         };
         failedPlanCount += 1;
       }
-      guestMentalPathFeedbackById.set(guest.id, mentalPathFeedback);
+      recordGuestObjectivePathFeedback(guest.id, mentalPathFeedback, behavior);
     }
 
     if (recordCycle) {
@@ -3028,6 +3496,7 @@ export function createHumanManager({
         enabled: true,
         guestCount: guests.length,
         fleeGuestCount,
+        shelterGuestCount,
         wanderGuestCount,
         shelterIntentGuestCount,
         dangerIntentGuestCount,
@@ -3035,7 +3504,18 @@ export function createHumanManager({
         replansAttempted,
         replansSucceeded,
         failedPlanCount,
+        replanReasonCounts,
+        dispatchModeCounts,
+        pathStatusCounts,
+        pathFeedbackStatusCounts,
+        shelterResolutionStats: {
+          ...shelterResolutionStats,
+          failureReasonCounts: { ...shelterResolutionStats.failureReasonCounts },
+        },
         fleeReplanSeconds: guestFleeReplanSeconds,
+        dangerReplanTargetShiftTiles:
+          resolvedGuestDangerPolicy.dangerReplanTargetShiftTiles,
+        shelterReplanSeconds: resolvedGuestShelterPolicy.replanSeconds,
         noCandidateStreakThreshold: guestWanderNoCandidateStreakThreshold,
         recoveryDurationSeconds: guestWanderRecoveryDurationSeconds,
         repickCooldownSeconds: guestWanderNoCandidateRepickCooldownSeconds,
@@ -3413,6 +3893,8 @@ export function createHumanManager({
                     objectiveDispatchMode:
                       guestBehaviorState.objectiveDispatchMode || "wander",
                     objectiveReasonCode: guestBehaviorState.objectiveReasonCode || null,
+                    objectiveReplanReasonCode:
+                      guestBehaviorState.objectiveReplanReasonCode || null,
                     objectivePathStatus:
                       guestBehaviorState.objectivePathStatus || "idle",
                     objectiveFailureReason:
@@ -3425,8 +3907,20 @@ export function createHumanManager({
                             y: guestBehaviorState.objectiveTargetWorld.y,
                           }
                         : null,
+                    replanCooldownSeconds: Number.isFinite(
+                      guestBehaviorState?.replanCooldownSeconds
+                    )
+                      ? guestBehaviorState.replanCooldownSeconds
+                      : 0,
                   }
                 : null,
+              pathFeedback: guestObjectivePathFeedbackById.get(record.id) || {
+                status: "none",
+                reason: null,
+                objectiveState: null,
+                dispatchMode: null,
+                targetWorld: null,
+              },
               dangerResponse:
                 guestDangerResponseDebugById.get(record.id) || {
                   candidateCount: 0,
@@ -3590,6 +4084,9 @@ export function createHumanManager({
       },
       guestBehavior: {
         enabled: true,
+        objectivePlanningPolicy: { ...resolvedGuestObjectivePlanningPolicy },
+        shelterPolicy: { ...resolvedGuestShelterPolicy },
+        safeZoneIndexConfig: guestSafeZoneIndex.getConfig(),
         lastCycle: lastGuestBehaviorCycle ? { ...lastGuestBehaviorCycle } : null,
         byGuest: Array.from(guestBehaviorById.entries()).map(([id, state]) => ({
           id,
@@ -3597,6 +4094,7 @@ export function createHumanManager({
           objectiveState: state.objectiveState || "wander",
           objectiveDispatchMode: state.objectiveDispatchMode || "wander",
           objectiveReasonCode: state.objectiveReasonCode || null,
+          objectiveReplanReasonCode: state.objectiveReplanReasonCode || null,
           objectivePathStatus: state.objectivePathStatus || "idle",
           objectiveFailureReason: state.objectiveFailureReason || null,
           objectiveTargetWorld:
@@ -3612,6 +4110,13 @@ export function createHumanManager({
             : 0,
           lastPlanReason: state.lastPlanReason || null,
           targetId: state.targetId ?? null,
+          pathFeedback: guestObjectivePathFeedbackById.get(id) || {
+            status: "none",
+            reason: null,
+            objectiveState: null,
+            dispatchMode: null,
+            targetWorld: null,
+          },
           dangerResponse:
             guestDangerResponseDebugById.get(id) || {
               candidateCount: 0,
@@ -3677,6 +4182,7 @@ export function createHumanManager({
     guestBehaviorById.clear();
     guestTileKnowledgeById.clear();
     guestMentalPathFeedbackById.clear();
+    guestObjectivePathFeedbackById.clear();
     guestWaypointSelectionDebugById.clear();
     guestDangerResponseDebugById.clear();
     guestWanderStateById.clear();

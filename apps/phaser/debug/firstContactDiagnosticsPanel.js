@@ -151,9 +151,11 @@ export function createFirstContactDiagnosticsPanel({
       const guestBehaviorCycle = humanManagerDebug.guestBehavior?.lastCycle || null;
       if (guestBehaviorCycle?.enabled) {
         lines.push(
-          `Guest behavior: flee ${toInt(guestBehaviorCycle.fleeGuestCount)} | wander ${toInt(
-            guestBehaviorCycle.wanderGuestCount
-          )} | replans ${toInt(guestBehaviorCycle.replansSucceeded)}/${toInt(
+          `Guest behavior: flee ${toInt(guestBehaviorCycle.fleeGuestCount)} | shelter ${toInt(
+            guestBehaviorCycle.shelterGuestCount
+          )} | wander ${toInt(guestBehaviorCycle.wanderGuestCount)} | replans ${toInt(
+            guestBehaviorCycle.replansSucceeded
+          )}/${toInt(
             guestBehaviorCycle.replansAttempted
           )}`
         );
@@ -164,9 +166,95 @@ export function createFirstContactDiagnosticsPanel({
             guestBehaviorCycle.wanderIntentGuestCount
           )}`
         );
+        const replanReasonCounts = guestBehaviorCycle.replanReasonCounts || null;
+        if (replanReasonCounts && typeof replanReasonCounts === "object") {
+          const reasonEntries = Object.entries(replanReasonCounts).sort((a, b) =>
+            String(a[0]).localeCompare(String(b[0]))
+          );
+          if (reasonEntries.length > 0) {
+            const reasonLabel = reasonEntries
+              .map(([reason, count]) => `${reason}:${toInt(count)}`)
+              .join(" | ");
+            lines.push(`Guest replan reasons: ${reasonLabel}`);
+          }
+        }
+        const dispatchModeCounts = guestBehaviorCycle.dispatchModeCounts || null;
+        if (dispatchModeCounts && typeof dispatchModeCounts === "object") {
+          lines.push(
+            `Guest dispatch: wander ${toInt(
+              dispatchModeCounts.wander
+            )} | shelter ${toInt(dispatchModeCounts.shelter)} | danger_flee ${toInt(
+              dispatchModeCounts.danger_flee
+            )} | danger_room_egress ${toInt(
+              dispatchModeCounts.danger_room_egress
+            )} | unknown ${toInt(dispatchModeCounts.unknown)}`
+          );
+        }
+        const pathStatusCounts = guestBehaviorCycle.pathStatusCounts || null;
+        if (pathStatusCounts && typeof pathStatusCounts === "object") {
+          lines.push(
+            `Guest path status: idle ${toInt(
+              pathStatusCounts.idle
+            )} | following ${toInt(pathStatusCounts.following_path)} | valid ${toInt(
+              pathStatusCounts.valid
+            )} | retrying ${toInt(pathStatusCounts.retrying)} | unknown ${toInt(
+              pathStatusCounts.unknown
+            )}`
+          );
+        }
+        const pathFeedbackStatusCounts =
+          guestBehaviorCycle.pathFeedbackStatusCounts || null;
+        if (
+          pathFeedbackStatusCounts &&
+          typeof pathFeedbackStatusCounts === "object"
+        ) {
+          lines.push(
+            `Guest path feedback: none ${toInt(
+              pathFeedbackStatusCounts.none
+            )} | success ${toInt(pathFeedbackStatusCounts.success)} | failure ${toInt(
+              pathFeedbackStatusCounts.failure
+            )} | unknown ${toInt(pathFeedbackStatusCounts.unknown)}`
+          );
+        }
+        const shelterResolutionStats =
+          guestBehaviorCycle.shelterResolutionStats || null;
+        if (
+          shelterResolutionStats &&
+          typeof shelterResolutionStats === "object"
+        ) {
+          lines.push(
+            `Guest shelter plan: attempts ${toInt(
+              shelterResolutionStats.attempted
+            )} | resolved ${toInt(
+              shelterResolutionStats.resolvedTarget
+            )} | assigned ${toInt(shelterResolutionStats.pathAssigned)} | failed ${toInt(
+              shelterResolutionStats.failed
+            )}`
+          );
+          lines.push(
+            `Guest shelter failures: no_safe_zone ${toInt(
+              shelterResolutionStats.noSafeZone
+            )} | path_failed ${toInt(
+              shelterResolutionStats.pathFailed
+            )} | rejected ${toInt(shelterResolutionStats.rejectedByController)}`
+          );
+          const shelterFailureReasons = shelterResolutionStats.failureReasonCounts;
+          if (shelterFailureReasons && typeof shelterFailureReasons === "object") {
+            const failureReasonEntries = Object.entries(shelterFailureReasons).sort(
+              (a, b) => String(a[0]).localeCompare(String(b[0]))
+            );
+            if (failureReasonEntries.length > 0) {
+              const failureReasonLabel = failureReasonEntries
+                .map(([reason, count]) => `${reason}:${toInt(count)}`)
+                .join(" | ");
+              lines.push(`Guest shelter reason map: ${failureReasonLabel}`);
+            }
+          }
+        }
       }
       if (Array.isArray(humanManagerDebug.guestBehavior?.byGuest)) {
         let fleeingNow = 0;
+        let shelteringNow = 0;
         let wanderingNow = 0;
         let shelterIntentNow = 0;
         let dangerIntentNow = 0;
@@ -177,6 +265,8 @@ export function createFirstContactDiagnosticsPanel({
         for (const guestState of humanManagerDebug.guestBehavior.byGuest) {
           if (guestState?.mode === "flee") {
             fleeingNow += 1;
+          } else if (guestState?.mode === "shelter") {
+            shelteringNow += 1;
           } else {
             wanderingNow += 1;
           }
@@ -198,9 +288,11 @@ export function createFirstContactDiagnosticsPanel({
           }
         }
         lines.push(
-          `Guest live states: flee ${toInt(fleeingNow)} | wander ${toInt(
-            wanderingNow
-          )} | replan cooldown ${toInt(replanningCooldownNow)}`
+          `Guest live states: flee ${toInt(fleeingNow)} | shelter ${toInt(
+            shelteringNow
+          )} | wander ${toInt(wanderingNow)} | replan cooldown ${toInt(
+            replanningCooldownNow
+          )}`
         );
         lines.push(
           `Guest live intent: shelter ${toInt(
