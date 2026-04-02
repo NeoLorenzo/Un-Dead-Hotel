@@ -5,7 +5,9 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
 ## Documents
 
 - `GAME_OVERVIEW.md`
-  - Project concept, current status, and gameplay roadmap.
+  - Current shipped state only (no future roadmap content).
+- `GAME_ROADMAP.md`
+  - Future roadmap only (no shipped-state reporting).
 - `GAME_ARCHITECTURE.md`
   - Runtime architecture, module boundaries, and system responsibilities.
 - `PROCEDURAL_GENERATION.md`
@@ -16,8 +18,6 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
   - Practical API contracts for generation/world/app modules.
 - `ENGINE_RUNTIME_CONTRACTS.md`
   - Frozen runtime-facing contract boundary for Phaser-first migration Phase 1.
-- `FINDING_OUR_WAY_PHASE_1_LOCOMOTION.md`
-  - Completed implementation/spec tracker for Finding Our Way Phase 1 (locomotion standardization).
 - `PHASER_ADAPTER_API.md`
   - Phase 3 adapter contract between Phaser scene runtime and engine systems.
 
@@ -31,6 +31,8 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
   - Completed phase-by-phase implementation/spec tracker for the first controllable human slice.
 - `archive/FIRST_ZOMBIE_IMPLEMENTATION_PLAN.md`
   - Completed phase-by-phase implementation/spec tracker for the first zombie slice.
+- `archive/Finding Our Way Expansion Documentation/`
+  - Completed and archived Finding Our Way expansion implementation docs (Phases 1-4 + final completion plan).
 
 ## Current Runtime Entrypoints
 

@@ -13,6 +13,7 @@ All project documentation is in the `documentation/` folder.
 
 - `documentation/README.md` (index)
 - `documentation/GAME_OVERVIEW.md`
+- `documentation/GAME_ROADMAP.md`
 - `documentation/GAME_ARCHITECTURE.md`
 - `documentation/PROCEDURAL_GENERATION.md`
 - `documentation/GAME_RUNTIME.md`

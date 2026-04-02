@@ -442,7 +442,7 @@ Diagnostics panel must also expose aggregate counts:
 8. Do overlay fields for objective, dispatch, target, and failure reason update in real time?
 9. Do panel aggregates for objective counts and retrying counts align with observed agents?
 
-## Deferred Follow-Up (Phase 5 Candidate)
+## Deferred Follow-Up (Post-Ship Backlog)
 
 - Performance hardening beyond the `<= 3%` safety gate.
 - Optional reintroduction of global influence-map and weighted path cost if local+objective integration proves insufficient.

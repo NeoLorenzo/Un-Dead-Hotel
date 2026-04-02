@@ -202,7 +202,7 @@ Each guest receives a scheduled brain evaluation:
 - Primary files:
   - `apps/phaser/human/guestMentalModel.js` (contract/types/constants only in this phase)
   - `apps/phaser/phaserApp.js` (default config injection)
-  - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_2_MENTAL_MODEL.md`
+  - `documentation/archive/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_2_MENTAL_MODEL.md`
 - Work:
   - Define `guestBrainConfig` shape including:
     - `brainConfigVersion`,

@@ -1,4 +1,4 @@
-# Finding Our Way Implementation Plan (Expansion Phase 2+)
+# Finding Our Way Implementation Plan (Expansion Phase 2+, Complete and Archived)
 
 ## Purpose
 
@@ -15,16 +15,17 @@ Define the implementation plan for the **Finding Our Way** gameplay/AI overhaul:
 - Expansion Phase 1 locomotion standardization completed on **March 21, 2026**.
 - Expansion Phase 3 danger recognition and response completed on **March 31, 2026**.
 - Expansion Phase 4 brain-to-movement integration completed on **March 31, 2026**.
-- This document now tracks remaining implementation work after Phase 4 completion.
+- Post-Phase-4 final polish decisions locked on **April 2, 2026**.
+- Finding Our Way expansion implementation is complete and ready-to-ship as of **April 2, 2026**.
+- Finding Our Way documentation archived on **April 2, 2026**.
 
 ## Master Addendum (March 28, 2026)
 
 - Phase-level docs now exist and should be treated as active implementation detail sources:
-  - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_1_LOCOMOTION.md`
-  - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_2_MENTAL_MODEL.md`
-  - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_3_DANGER_PATHFINDING.md`
-  - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_4_BRAIN_MOVEMENT_INTEGRATION.md`
-  - `documentation/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_5_HARDENING_AND_POLISH.md`
+  - `documentation/archive/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_1_LOCOMOTION.md`
+  - `documentation/archive/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_2_MENTAL_MODEL.md`
+  - `documentation/archive/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_3_DANGER_PATHFINDING.md`
+  - `documentation/archive/Finding Our Way Expansion Documentation/FINDING_OUR_WAY_PHASE_4_BRAIN_MOVEMENT_INTEGRATION.md`
 - Phase 3 planning now includes subphase `3E`:
   - if a guest has danger while in room context, nearest-door egress takes priority before generic danger flee routing.
 - Debug-mode-first rule is locked:
@@ -41,6 +42,11 @@ Define the implementation plan for the **Finding Our Way** gameplay/AI overhaul:
   - danger objective priority over shelter/wander enforced,
   - shelter excludes danger-marked rooms from candidate targets,
   - guest planning decoupled from zombie wander planner.
+- Final polish decisions locked on **April 2, 2026**:
+  - no feature flags for Finding Our Way rollout,
+  - survivor conversion behavior remains as currently implemented (touch conversion, no additional cooldown/guard),
+  - no dedicated formal regression-check gate is required for this release pass,
+  - implementation is declared complete and ready-to-ship.
 
 ## Expansion Sequencing Update (Locked)
 
@@ -209,65 +215,42 @@ The following two constraints are copied verbatim and are implementation-critica
 
 ## Milestones
 
-1. Milestone 1: Pathfinder weighting foundation
-   - `subTilePathfinder` supports additive traversal penalty callbacks with no regressions.
-2. Milestone 2: Danger representation core
-   - Low-res influence grid and per-guest danger memory pipeline produce stable sampled danger values.
-3. Milestone 3: Objective planning baseline
-   - Objective planning builds on the completed Phase 2 weighted mental-model baseline.
-4. Milestone 4: Objective completion in integration loop
-   - Remaining shelter and evade planner completion is delivered inside Human Manager integration.
-5. Milestone 5: Decoupling completion
-   - Guest behavior no longer relies on zombie wander planner implementation.
-6. Milestone 6: Stability and docs sync
-   - Performance/stability pass complete and documentation updated.
+1. Milestone 1: Locomotion standardization complete (Phase 1).
+2. Milestone 2: Weighted mental model complete (Phase 2).
+3. Milestone 3: Danger recognition/response complete (Phase 3).
+4. Milestone 4: Brain-to-movement integration complete (Phase 4).
+5. Milestone 5: Final polish decisions locked post-Phase-4 (no new phase).
 
 ## Acceptance Criteria
 
 1. Guest behavior no longer depends on zombie wander planner logic for objective selection.
-2. Influence map exists as a separate, lower-resolution grid and is not a mutation of base nav data.
-3. Influence gradient applies `+50` at threat center and approaches `+2` at configured edge radius.
-4. Guest path planning uses additive influence penalties on top of base navigation cost.
-5. Utility brain selects among `seek_shelter`, `wander`, and `flee` based on weighted evaluation.
-6. Danger detection can override shelter bias; danger decay can return guests to shelter bias.
-7. LOS break preserves last-known threat memory until configured expiry.
-8. Guests can target safe-zone rooms and idle/hold behavior there per locked policy.
-9. Debug overlays/diagnostics expose influence-map and utility state in real time.
-10. All post-Phase-1 systems preserve the shared grid locomotion contract introduced in Expansion Phase 1.
+2. Utility brain objective dispatch remains authoritative for `danger`, `shelter`, and `wander`.
+3. Danger priority, shelter completion handoff, and danger-room shelter exclusion are stable and deterministic.
+4. Deterministic replan reasons and path-feedback envelopes are emitted and inspectable.
+5. Rollout policy is locked to no feature flags.
+6. Survivor conversion policy is locked to current as-is behavior.
+7. No dedicated formal regression-check gate is required for this release pass.
+8. Documentation is synchronized with shipped behavior and completion status.
+9. Finding Our Way expansion is declared implementation-complete and ready-to-ship.
 
 ## Risks and Mitigations
 
-1. Risk: Weighted pathfinding increases CPU cost.
-   - Mitigation: low-res influence grid, capped update cadence, and optional sampling cache.
-2. Risk: Guests oscillate objectives (flee/shelter thrash).
+1. Risk: Guests oscillate objectives (flee/shelter thrash).
    - Mitigation: hysteresis thresholds, minimum objective hold time, smoothed danger decay.
-3. Risk: Safe-zone lookup becomes inconsistent across streamed chunks.
+2. Risk: Safe-zone lookup becomes inconsistent across streamed chunks.
    - Mitigation: bounded local index refresh and fallback target strategy when nearest room is invalid.
-4. Risk: Influence values overpower base movement cost and create unnatural detours.
-   - Mitigation: clamp penalties and expose tuning constants for balancing.
-5. Risk: Regression in survivor command pathfinding from pathfinder changes.
-   - Mitigation: strict backward-compat behavior when weight callback is omitted and regression checks in command flow.
+3. Risk: Regression in survivor command pathfinding from behavior-path updates.
+   - Mitigation: maintain backward-compatible behavior and continue continuous in-development playtesting.
+4. Risk: Late-stage decision changes cause release drift.
+   - Mitigation: lock final polish decisions post-Phase-4 and avoid reopening expansion scope.
 
-## Phase 2.0 Decision Checklist (Post-Phase-1)
+## Post-Phase-4 Final Polish Decisions (Locked)
 
-- [ ] Runtime rollout policy locked (`first_contact` feature-gated vs dedicated mode).
-- [ ] Influence map resolution locked (example: `1.0` or `2.0` world-tile cells).
-- [ ] Influence radius and gradient function locked.
-- [ ] Danger memory expiry/decay rule locked.
-- [x] Danger memory ownership locked as per-guest only (no shared guest memory).
-- [ ] Utility baseline weights and danger growth/decay curves locked.
-- [x] Safe-zone definition locked (deterministic nearest walkable room-anchor policy).
-- [x] Shelter completion behavior locked (brain arbitration hands shelter to wander when in-room and low-danger).
+1. Rollout mode is locked to no feature flags.
+2. Survivor conversion behavior remains as currently implemented.
+3. No dedicated formal regression-check gate is required for this release pass.
+4. Expansion scope is closed at Phase 4 + final polish decisions.
 
-## Questions To Resolve (Must Be Answered)
+## Completion Declaration (April 2, 2026)
 
-1. Should this ship in existing `first_contact` mode behind a feature flag, or as a new runtime mode (for example `finding_our_way`)?
-2. What exact low-resolution influence cell size should we lock first (`1.0` tiles vs `2.0` tiles)?
-3. What exact danger influence radius should use the `+50` center -> `+2` edge gradient?
-4. What exact danger growth function should be used when zombie is visible (distance-only, LOS-duration-only, or combined)?
-5. What exact danger decay and memory expiry timing should apply after LOS is lost?
-6. Resolved on March 28, 2026: danger points are per-guest memory only (no shared guest memory model).
-7. Resolved on March 31, 2026: `seek_shelter` targets deterministic nearest walkable room anchors from guest safe-zone index.
-8. Resolved on March 31, 2026: shelter completion transitions by brain arbitration (`shelter_satisfied` -> `wander`) when in-room and low-danger.
-9. Should survivor pathfinding remain unweighted, or optionally use influence-map weights in a future phase?
-10. Do we keep current guest conversion-on-touch exactly as-is during this overhaul, or add any conversion cooldown/guard rules?
+Finding Our Way expansion implementation is complete and ready-to-ship.
