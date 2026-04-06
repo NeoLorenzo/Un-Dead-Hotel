@@ -5,6 +5,10 @@ const BLOCKED_STROKE_COLOR = 0xff9a9a;
 const BLOCKED_STROKE_ALPHA = 0.45;
 const VISITED_FILL_COLOR = 0x6aa8ff;
 const VISITED_FILL_ALPHA = 0.4;
+const FURNITURE_OCCUPIED_FILL_COLOR = 0xffd166;
+const FURNITURE_OCCUPIED_FILL_ALPHA = 0.18;
+const FURNITURE_OCCUPIED_STROKE_COLOR = 0xffd166;
+const FURNITURE_OCCUPIED_STROKE_ALPHA = 0.7;
 const PATH_STROKE_COLOR = 0x64fffa;
 const PATH_STROKE_ALPHA = 1;
 const PATH_NODE_FILL_COLOR = 0x64fffa;
@@ -480,6 +484,69 @@ function drawVisitedNodes(visitedNodes, cameraTile, tilePixels, width, height) {
         height
       );
       overlay.fillRect(rect.x, rect.y, rect.w, rect.h);
+  }
+}
+
+  function parseTileKey(tileKey) {
+    if (typeof tileKey !== "string" || tileKey.length === 0) {
+      return null;
+    }
+    const [xRaw, yRaw] = tileKey.split(",");
+    const x = Number(xRaw);
+    const y = Number(yRaw);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return null;
+    }
+    return {
+      x: Math.floor(x),
+      y: Math.floor(y),
+    };
+  }
+
+  function drawFurnitureOccupancy(
+    furnitureDebug,
+    cameraTile,
+    tilePixels,
+    width,
+    height
+  ) {
+    const occupiedTiles = Array.isArray(furnitureDebug?.occupiedTiles)
+      ? furnitureDebug.occupiedTiles
+      : [];
+    if (occupiedTiles.length === 0) {
+      return;
+    }
+    overlay.fillStyle(FURNITURE_OCCUPIED_FILL_COLOR, FURNITURE_OCCUPIED_FILL_ALPHA);
+    overlay.lineStyle(
+      Math.max(1, Math.round(tilePixels * 0.1)),
+      FURNITURE_OCCUPIED_STROKE_COLOR,
+      FURNITURE_OCCUPIED_STROKE_ALPHA
+    );
+    for (const entry of occupiedTiles) {
+      const tile = parseTileKey(entry?.tileKey);
+      if (!tile) {
+        continue;
+      }
+      const rect = worldRectScreen(
+        tile.x,
+        tile.y,
+        1,
+        1,
+        cameraTile,
+        tilePixels,
+        width,
+        height
+      );
+      if (
+        rect.x + rect.w < 0 ||
+        rect.y + rect.h < 0 ||
+        rect.x > width ||
+        rect.y > height
+      ) {
+        continue;
+      }
+      overlay.fillRect(rect.x, rect.y, rect.w, rect.h);
+      overlay.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w, rect.h);
     }
   }
 
@@ -2267,6 +2334,15 @@ function drawVisionCone(
       (typeof humanManager?.getDebugState === "function"
         ? humanManager.getDebugState()
         : null);
+    const furnitureDebug = debugSnapshot?.furniture || null;
+
+    drawFurnitureOccupancy(
+      furnitureDebug,
+      cameraTile,
+      tilePixels,
+      viewWidthPx,
+      viewHeightPx
+    );
 
     drawVisitedNodes(
       commandDebug?.lastPathDebug?.visitedCells || [],

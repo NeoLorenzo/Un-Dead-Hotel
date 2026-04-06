@@ -938,10 +938,11 @@ export function evaluateGuestMentalModel({
     pendingRetryObjectiveState = null;
     arbitrationReasonCode = "fallback_retry_due";
   }
+  // Brain objective authority now uses scored arbitration as final decision.
+  // Keep danger-priority signal in debug telemetry, but do not hard-force
+  // objective danger when score winner is a different state.
   if (!forcedObjectiveState && dangerPrioritySignalActive) {
-    forcedObjectiveState = OBJECTIVE_DANGER;
-    arbitrationReasonCode = "danger_priority_override";
-    dangerPriorityOverrideApplied = true;
+    dangerPriorityOverrideApplied = false;
   }
   if (
     !forcedObjectiveState &&

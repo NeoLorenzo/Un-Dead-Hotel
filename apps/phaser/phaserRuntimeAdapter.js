@@ -714,6 +714,11 @@ export function createPhaserRuntimeAdapter({
     const assignmentTileId = Number(rawChunk.assignment?.tileId) || 0;
     const worldX = chunkX * CHUNK_SIZE;
     const worldY = chunkY * CHUNK_SIZE;
+    const furnitureDescriptors = Array.isArray(rawChunk?.furnitureDescriptors)
+      ? rawChunk.furnitureDescriptors
+      : [];
+    const furnitureDescriptorCount =
+      Number(rawChunk?.furnitureDescriptorCount) || furnitureDescriptors.length;
     const fillColor =
       CHUNK_PREVIEW_FILL_COLORS[
         assignmentTileId % CHUNK_PREVIEW_FILL_COLORS.length
@@ -729,6 +734,13 @@ export function createPhaserRuntimeAdapter({
       sockets: rawChunk.assignment?.sockets || { N: false, E: false, S: false, W: false },
       tileMap: rawChunk.tileMap,
       rooms: rawChunk.rooms || [],
+      furnitureDescriptorSchemaVersion: Number(rawChunk?.furnitureDescriptorSchemaVersion) || 1,
+      furnitureDescriptors,
+      furnitureDescriptorCount,
+      furnitureByTypeCounts:
+        rawChunk?.furnitureByTypeCounts && typeof rawChunk.furnitureByTypeCounts === "object"
+          ? rawChunk.furnitureByTypeCounts
+          : {},
       collisionGeometry: rawChunk.collisionGeometry || null,
       navigationData: rawChunk.navigationData || null,
       render: {
@@ -769,6 +781,31 @@ export function createPhaserRuntimeAdapter({
       loadedWidth,
       loadedHeight,
     };
+  }
+
+  function getLoadedChunkViewModels() {
+    const loadedBounds = worldStore.getLoadedBounds();
+    if (
+      !Number.isFinite(loadedBounds?.minX) ||
+      !Number.isFinite(loadedBounds?.maxX) ||
+      !Number.isFinite(loadedBounds?.minY) ||
+      !Number.isFinite(loadedBounds?.maxY)
+    ) {
+      return [];
+    }
+
+    const chunks = [];
+    for (let chunkY = loadedBounds.minY; chunkY <= loadedBounds.maxY; chunkY += 1) {
+      for (let chunkX = loadedBounds.minX; chunkX <= loadedBounds.maxX; chunkX += 1) {
+        const rawChunk = worldStore.ensureChunk(chunkX, chunkY);
+        chunks.push({
+          chunkX,
+          chunkY,
+          chunk: buildChunkViewModel(chunkX, chunkY, rawChunk),
+        });
+      }
+    }
+    return chunks;
   }
 
   function moveCameraBy(dxTiles, dyTiles) {
@@ -815,5 +852,6 @@ export function createPhaserRuntimeAdapter({
     getFrameSnapshot,
     getLoadedBounds,
     getLoadedChunkCount,
+    getLoadedChunkViewModels,
   };
 }

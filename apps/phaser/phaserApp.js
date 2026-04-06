@@ -20,6 +20,11 @@ import { createHumanSelectionController } from "./human/humanSelectionController
 import { createAgentHpBarOverlay } from "./ui/agentHpBarOverlay.js";
 import { createGameOverOverlay } from "./ui/gameOverOverlay.js";
 import { createZombieManager } from "./zombie/zombieManager.js";
+import { createFurnitureCatalog } from "./furniture/furnitureCatalog.js";
+import {
+  createDeterministicFurnitureId,
+  createFurnitureStateStore,
+} from "./furniture/furnitureStateStore.js";
 
 const GAME_WIDTH = 1280;
 const GAME_HEIGHT = 720;
@@ -96,10 +101,12 @@ const TILE_COLOR_ROOM = "#efefef";
 const TILE_COLOR_ROOM_DOOR = "#ff9100";
 const TILE_COLOR_DEFAULT = "#8f8f8f";
 const TILE_COLOR_ROOM_THIN_WALL = "#8f8f8f";
+const runtimeFurnitureCatalog = createFurnitureCatalog();
 
 const metaElement = document.getElementById("game-meta");
 const mountElement = document.getElementById("game-root");
 const runtimeOverlayElement = document.getElementById("runtime-overlay");
+const gameClockElement = document.getElementById("game-clock");
 const diagnosticsTextToggleElement = document.getElementById("toggle-diagnostics-text");
 const visionDebugToggleElement = document.getElementById("toggle-debug-vision");
 const trackInspectedGuestToggleElement = document.getElementById(
@@ -134,6 +141,7 @@ setRuntimeOverlayVisible(false);
 
 const runtimeHud = createRuntimeHud({
   element: metaElement,
+  clockElement: gameClockElement,
   seed: NEXTGEN_SEED,
   streamWidthChunks: STREAM_WIDTH_CHUNKS,
   streamHeightChunks: STREAM_HEIGHT_CHUNKS,
@@ -170,6 +178,22 @@ function moveTowards(current, target, maxStep) {
 
 function chunkKey(chunkX, chunkY) {
   return `${chunkX},${chunkY}`;
+}
+
+function loadedBoundsKey(loadedBounds) {
+  const minX = Number(loadedBounds?.minX);
+  const maxX = Number(loadedBounds?.maxX);
+  const minY = Number(loadedBounds?.minY);
+  const maxY = Number(loadedBounds?.maxY);
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxY)
+  ) {
+    return "none";
+  }
+  return `${minX},${minY},${maxX},${maxY}`;
 }
 
 function nearestChunkTextureTilePixels(tilePixels) {
@@ -257,6 +281,31 @@ function tileColor(tile) {
   return TILE_COLOR_DEFAULT;
 }
 
+function furnitureTypeColor(typeId) {
+  if (typeId === "bed") {
+    return "#5e8fcb";
+  }
+  if (typeId === "nightstand") {
+    return "#d49f64";
+  }
+  if (typeId === "closet") {
+    return "#8f6bd1";
+  }
+  if (typeId === "sink") {
+    return "#5cc4d6";
+  }
+  if (typeId === "mini_bar") {
+    return "#f08aa9";
+  }
+  if (typeId === "chair") {
+    return "#7ba95f";
+  }
+  if (typeId === "table") {
+    return "#be8b5f";
+  }
+  return "#666666";
+}
+
 function drawThinExteriorWallsForRooms(
   ctx,
   rooms,
@@ -327,6 +376,36 @@ function drawChunkToCanvas(canvas, chunk, chunkSize, tilePixels) {
   if (chunk.rooms && chunk.rooms.length > 0) {
     drawThinExteriorWallsForRooms(ctx, chunk.rooms, tileMap, chunkSize, tilePixels);
   }
+
+  const furnitureDescriptors = Array.isArray(chunk?.furnitureDescriptors)
+    ? chunk.furnitureDescriptors
+    : [];
+  for (const descriptor of furnitureDescriptors) {
+    const typeId = String(descriptor?.typeId || "");
+    const typeDef = runtimeFurnitureCatalog[typeId];
+    if (!typeDef) {
+      continue;
+    }
+    const tileX = Math.floor(Number(descriptor?.tileX));
+    const tileY = Math.floor(Number(descriptor?.tileY));
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+      continue;
+    }
+    const widthTiles = Math.max(1, Number(typeDef?.footprint?.widthTiles) || 1);
+    const heightTiles = Math.max(1, Number(typeDef?.footprint?.heightTiles) || 1);
+    const leftPx = tileX * tilePixels;
+    const topPx = tileY * tilePixels;
+    const widthPx = widthTiles * tilePixels;
+    const heightPx = heightTiles * tilePixels;
+    const color = furnitureTypeColor(typeId);
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(leftPx, topPx, widthPx, heightPx);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "#111111";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(leftPx + 0.5, topPx + 0.5, widthPx - 1, heightPx - 1);
+  }
 }
 
 async function loadPhaserModule() {
@@ -378,6 +457,13 @@ function createRuntimeScene(Phaser) {
       this.agentHpBarOverlay = null;
       this.gameOverOverlay = null;
       this.gameOverActive = false;
+      this.furnitureStateStore = null;
+      this.lastFurnitureHydrationBoundsKey = "none";
+      this.furnitureHydratedRecordCount = 0;
+      this.furnitureHydratedTileCount = 0;
+      this.furnitureHydratedChunkCount = 0;
+      this.furnitureHydrationError = null;
+      this.clockDisplay = { dayLabel: "Day 1", timeLabel: "00:00" };
       this.humanCommandDebugBridge = null;
       this.humanManagerDebugBridge = null;
       this.zombieManagerDebugBridge = null;
@@ -486,7 +572,108 @@ function createRuntimeScene(Phaser) {
           typeof this.humanController?.getDebugState === "function"
             ? this.humanController.getDebugState()
             : null,
+        furniture: this.buildFurnitureDebugSnapshot(),
       };
+    }
+
+    buildFurnitureDebugSnapshot() {
+      if (!this.furnitureStateStore) {
+        return null;
+      }
+      const records = this.furnitureStateStore.getFurnitureRecords();
+      const occupiedTiles = this.furnitureStateStore.getOccupiedTileEntries();
+      const typeCounts = {};
+      for (const record of records) {
+        const typeId = String(record?.typeId || "unknown");
+        typeCounts[typeId] = (typeCounts[typeId] || 0) + 1;
+      }
+      return {
+        recordCount: records.length,
+        occupiedTileCount: occupiedTiles.length,
+        occupiedTiles,
+        typeCounts,
+        sampleFurnitureIds: records.slice(0, 5).map((record) => String(record.furnitureId)),
+        sampleOccupiedTiles: occupiedTiles
+          .slice(0, 5)
+          .map((entry) => `${entry.tileKey}=>${entry.furnitureId}`),
+      };
+    }
+
+    hydrateFurnitureStateFromLoadedChunks(loadedChunkViewModels) {
+      if (!this.furnitureStateStore) {
+        return;
+      }
+
+      try {
+        const chunkSize = Number(this.runtime?.chunkSize) || 32;
+        const records = [];
+
+        for (const item of loadedChunkViewModels || []) {
+          const chunkX = Number(item?.chunkX);
+          const chunkY = Number(item?.chunkY);
+          if (!Number.isFinite(chunkX) || !Number.isFinite(chunkY)) {
+            continue;
+          }
+
+          const furnitureDescriptors = Array.isArray(item?.chunk?.furnitureDescriptors)
+            ? item.chunk.furnitureDescriptors
+            : [];
+
+          for (const descriptor of furnitureDescriptors) {
+            const typeId = String(descriptor?.typeId || "");
+            const roomId = String(descriptor?.roomId || "");
+            const spawnSlotId = String(descriptor?.spawnSlotId || "");
+            const orientation = String(descriptor?.orientation || "north");
+            const localTileX = Math.floor(Number(descriptor?.tileX));
+            const localTileY = Math.floor(Number(descriptor?.tileY));
+
+            if (
+              !typeId ||
+              !roomId ||
+              !spawnSlotId ||
+              !Number.isFinite(localTileX) ||
+              !Number.isFinite(localTileY)
+            ) {
+              continue;
+            }
+
+            const worldTileX = chunkX * chunkSize + localTileX;
+            const worldTileY = chunkY * chunkSize + localTileY;
+            const furnitureId = createDeterministicFurnitureId({
+              chunkX,
+              chunkY,
+              roomId,
+              spawnSlotId,
+              typeId,
+            });
+
+            records.push({
+              furnitureId,
+              typeId,
+              tileX: worldTileX,
+              tileY: worldTileY,
+              orientation,
+              chunkX,
+              chunkY,
+              roomId,
+              spawnSlotId,
+              inventory: [],
+              resourceState: {},
+            });
+          }
+        }
+
+        this.furnitureStateStore.setFurnitureRecords(records, { replace: true });
+        this.furnitureHydratedRecordCount = this.furnitureStateStore.getFurnitureRecords().length;
+        this.furnitureHydratedTileCount = this.furnitureStateStore.getOccupiedTileEntries().length;
+        this.furnitureHydratedChunkCount = Array.isArray(loadedChunkViewModels)
+          ? loadedChunkViewModels.length
+          : 0;
+        this.furnitureHydrationError = null;
+      } catch (error) {
+        this.furnitureHydrationError =
+          error instanceof Error ? error.message : "Unknown furniture hydration error.";
+      }
     }
 
     create() {
@@ -495,6 +682,10 @@ function createRuntimeScene(Phaser) {
         streamHeightChunks: STREAM_HEIGHT_CHUNKS,
       });
       this.runtime.ensureStreamWindow();
+      this.furnitureStateStore = createFurnitureStateStore();
+      this.clockDisplay = this.furnitureStateStore.formatClockDisplay();
+      this.lastFurnitureHydrationBoundsKey = loadedBoundsKey(this.runtime.getLoadedBounds());
+      this.hydrateFurnitureStateFromLoadedChunks(this.runtime.getLoadedChunkViewModels());
       this.debugController = createRuntimeDebugController({
         onVisibilityChanged: setRuntimeOverlayVisible,
         initialEnabled: this.debugOverlayEnabled,
@@ -566,7 +757,7 @@ function createRuntimeScene(Phaser) {
                 shelterMaxPathNodes: 12000,
                 objectivePlanning: {
                   enforceBrainObjectiveAuthority: true,
-                  allowRoomDangerOverride: true,
+                  allowRoomDangerOverride: false,
                 },
               }
             : null;
@@ -797,6 +988,7 @@ function createRuntimeScene(Phaser) {
           humanController: this.humanController,
           humanCommandController: this.humanCommandController,
           zombieManager: this.zombieManager,
+          getFurnitureDebugState: () => this.buildFurnitureDebugSnapshot(),
           getGameOverActive: () => this.gameOverActive,
         });
         this.debugController.addRenderer(this.firstContactDiagnosticsPanel);
@@ -1066,6 +1258,13 @@ function createRuntimeScene(Phaser) {
         this.humanDebugOverlay = null;
         this.zombieDebugOverlay = null;
         this.firstContactDiagnosticsPanel = null;
+        this.furnitureStateStore = null;
+        this.lastFurnitureHydrationBoundsKey = "none";
+        this.furnitureHydratedRecordCount = 0;
+        this.furnitureHydratedTileCount = 0;
+        this.furnitureHydratedChunkCount = 0;
+        this.furnitureHydrationError = null;
+        this.clockDisplay = { dayLabel: "Day 1", timeLabel: "00:00" };
         this.humanCommandDebugBridge = null;
         this.humanManagerDebugBridge = null;
         this.zombieManagerDebugBridge = null;
@@ -1128,6 +1327,18 @@ function createRuntimeScene(Phaser) {
         this.dirty = true;
       }
       if (!this.simulationPaused) {
+        if (this.furnitureStateStore) {
+          const previousClockDisplay = this.clockDisplay || { dayLabel: "Day 1", timeLabel: "00:00" };
+          this.furnitureStateStore.advanceClock(dt);
+          const nextClockDisplay = this.furnitureStateStore.formatClockDisplay();
+          this.clockDisplay = nextClockDisplay;
+          if (
+            nextClockDisplay.dayLabel !== previousClockDisplay.dayLabel ||
+            nextClockDisplay.timeLabel !== previousClockDisplay.timeLabel
+          ) {
+            this.dirty = true;
+          }
+        }
         if (this.humanManager && this.humanManager.update(dt)) {
           this.dirty = true;
         }
@@ -1241,6 +1452,14 @@ function createRuntimeScene(Phaser) {
       const width = this.scale.width;
       const height = this.scale.height;
       const snapshot = this.runtime.getFrameSnapshot(width, height, this.tilePixels);
+      const currentLoadedBoundsKey = loadedBoundsKey(snapshot.loadedBounds);
+      if (
+        this.furnitureStateStore &&
+        currentLoadedBoundsKey !== this.lastFurnitureHydrationBoundsKey
+      ) {
+        this.hydrateFurnitureStateFromLoadedChunks(this.runtime.getLoadedChunkViewModels());
+        this.lastFurnitureHydrationBoundsKey = currentLoadedBoundsKey;
+      }
       const debugSnapshot =
         this.debugController &&
         typeof this.debugController.isEnabled === "function" &&
@@ -1393,6 +1612,7 @@ function createRuntimeScene(Phaser) {
         cameraChunk: snapshot.cameraChunk,
         viewportChunksDrawn: snapshot.visibleChunkCount,
         zoomTilePixels: this.tilePixels,
+        clockDisplay: this.clockDisplay,
       });
       if (metaElement) {
         const rendererType = this.game?.renderer?.type;
@@ -1402,7 +1622,10 @@ function createRuntimeScene(Phaser) {
           ? measuredFps.toFixed(1)
           : "n/a";
         metaElement.textContent +=
-          ` | Renderer: ${rendererLabel} | Pending chunk textures: ${pendingChunkTextures} | Phaser: ${Phaser.VERSION} | FPS: ${fpsLabel}`;
+          ` | Renderer: ${rendererLabel} | Pending chunk textures: ${pendingChunkTextures} | Furniture: ${this.furnitureHydratedRecordCount} objs/${this.furnitureHydratedTileCount} tiles/${this.furnitureHydratedChunkCount} chunks | Phaser: ${Phaser.VERSION} | FPS: ${fpsLabel}`;
+        if (this.furnitureHydrationError) {
+          metaElement.textContent += ` | Furniture hydration error: ${this.furnitureHydrationError}`;
+        }
       }
     }
   };

@@ -76,6 +76,16 @@ const ROOM_PREFAB_CATALOG = [
   buildRoomPrefabDefinition("R04", 10, 5),
 ];
 const ROOM_PREFAB_VARIANTS = buildRoomPrefabVariants(ROOM_PREFAB_CATALOG);
+const FURNITURE_DESCRIPTOR_SCHEMA_VERSION = 1;
+const FURNITURE_FOOTPRINT_BY_TYPE = Object.freeze({
+  bed: Object.freeze({ widthTiles: 2, heightTiles: 2 }),
+  nightstand: Object.freeze({ widthTiles: 1, heightTiles: 1 }),
+  closet: Object.freeze({ widthTiles: 1, heightTiles: 2 }),
+  sink: Object.freeze({ widthTiles: 1, heightTiles: 1 }),
+  mini_bar: Object.freeze({ widthTiles: 1, heightTiles: 1 }),
+  chair: Object.freeze({ widthTiles: 1, heightTiles: 1 }),
+  table: Object.freeze({ widthTiles: 2, heightTiles: 1 }),
+});
 const TILE_CORRIDOR = 1;
 const SPECIAL_TILE_MIN = 2;
 const SPECIAL_TILE_MAX_EXCLUSIVE = SPECIAL_TILE_MIN + SPECIAL_SPACE_DEFS.length;
@@ -1298,18 +1308,17 @@ function collectCorridorAccessibleRoomCandidates(zone, baseTileMap, cx, cy, zone
           prefabTileMap: variant.tileMap,
         };
         const doorBySide = collectCorridorDoorCandidatesBySide(baseTileMap, room);
-        const doorCandidates = [...doorBySide.N, ...doorBySide.E, ...doorBySide.S, ...doorBySide.W];
-        if (doorCandidates.length === 0) {
-          continue;
-        }
         const shortDoorCandidates = [];
         for (const side of shortSideDirections(room)) {
           shortDoorCandidates.push(...doorBySide[side]);
         }
+        if (shortDoorCandidates.length === 0) {
+          continue;
+        }
 
         candidates.push({
           ...room,
-          doorCandidates,
+          doorCandidates: shortDoorCandidates,
           shortSideDoorCandidates: shortDoorCandidates,
           candidateOrder: candidates.length,
           tie: hashParts(
@@ -1356,8 +1365,7 @@ function placeCorridorAccessibleRoomsInZone(zone, baseTileMap, cx, cy, zoneIndex
   if (candidates.length === 0) {
     return { rooms: [], uncoveredArea: zone.area };
   }
-  const preferredCandidates = candidates.filter((candidate) => candidate.shortSideDoorCandidates.length > 0);
-  const candidatePool = preferredCandidates.length > 0 ? preferredCandidates : candidates;
+  const candidatePool = candidates;
 
   const orderings = [
     {
@@ -1833,7 +1841,13 @@ function roomNeedsMerge(room, corridorMap) {
   if (room.w < MIN_ROOM_SIZE || room.h < MIN_ROOM_SIZE) {
     return true;
   }
-  return collectCorridorDoorCandidates(corridorMap, room).length === 0;
+  const doorBySide = collectCorridorDoorCandidatesBySide(corridorMap, room);
+  for (const side of shortSideDirections(room)) {
+    if (doorBySide[side].length > 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function resolveRoomsByMerging(initialRooms, corridorMap, cx, cy) {
@@ -1862,8 +1876,14 @@ function resolveRoomsByMerging(initialRooms, corridorMap, cx, cy) {
         }
 
         const merged = mergeRooms(room, target);
-        const mergedHasDoor = collectCorridorDoorCandidates(corridorMap, merged).length > 0;
-        const targetHasDoor = collectCorridorDoorCandidates(corridorMap, target).length > 0;
+        const mergedDoorBySide = collectCorridorDoorCandidatesBySide(corridorMap, merged);
+        const targetDoorBySide = collectCorridorDoorCandidatesBySide(corridorMap, target);
+        const mergedHasDoor = shortSideDirections(merged).some(
+          (side) => mergedDoorBySide[side].length > 0
+        );
+        const targetHasDoor = shortSideDirections(target).some(
+          (side) => targetDoorBySide[side].length > 0
+        );
         candidates.push({
           index: j,
           merged,
@@ -1953,6 +1973,398 @@ function stampRoomPrefabFootprint(tileMap, room) {
   }
 }
 
+function canPlaceFurnitureFootprint(tileMap, occupiedKeys, tileX, tileY, widthTiles, heightTiles) {
+  if (!Number.isInteger(tileX) || !Number.isInteger(tileY)) {
+    return false;
+  }
+  if (!Number.isInteger(widthTiles) || !Number.isInteger(heightTiles)) {
+    return false;
+  }
+  if (widthTiles <= 0 || heightTiles <= 0) {
+    return false;
+  }
+  if (
+    tileX < 0 ||
+    tileY < 0 ||
+    tileX + widthTiles > CHUNK_SIZE ||
+    tileY + heightTiles > CHUNK_SIZE
+  ) {
+    return false;
+  }
+
+  for (let dy = 0; dy < heightTiles; dy += 1) {
+    for (let dx = 0; dx < widthTiles; dx += 1) {
+      const x = tileX + dx;
+      const y = tileY + dy;
+      if (tileMap[y * CHUNK_SIZE + x] !== TILE_ROOM_FLOOR) {
+        return false;
+      }
+      if (occupiedKeys.has(coordKey(x, y))) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function claimFurnitureFootprint(occupiedKeys, tileX, tileY, widthTiles, heightTiles) {
+  for (let dy = 0; dy < heightTiles; dy += 1) {
+    for (let dx = 0; dx < widthTiles; dx += 1) {
+      occupiedKeys.add(coordKey(tileX + dx, tileY + dy));
+    }
+  }
+}
+
+function summarizeFurnitureDescriptorsByType(furnitureDescriptors) {
+  const summary = {};
+  for (const descriptor of furnitureDescriptors) {
+    const typeId = String(descriptor?.typeId || "unknown");
+    summary[typeId] = (summary[typeId] || 0) + 1;
+  }
+  return summary;
+}
+
+function countDoorTilesOnRoomWall(tileMap, room, side) {
+  if (!(tileMap instanceof Uint8Array) || !room) {
+    return 0;
+  }
+
+  let count = 0;
+  if (side === "N" || side === "S") {
+    const y = side === "N" ? room.y : room.y + room.h - 1;
+    for (let x = room.x + 1; x < room.x + room.w - 1; x += 1) {
+      if (tileMap[y * CHUNK_SIZE + x] === TILE_ROOM_DOOR) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  const x = side === "W" ? room.x : room.x + room.w - 1;
+  for (let y = room.y + 1; y < room.y + room.h - 1; y += 1) {
+    if (tileMap[y * CHUNK_SIZE + x] === TILE_ROOM_DOOR) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function buildCenteredStartPositions(minStart, maxStart, preferPositiveFirst = true) {
+  if (
+    !Number.isFinite(minStart) ||
+    !Number.isFinite(maxStart) ||
+    maxStart < minStart
+  ) {
+    return [];
+  }
+
+  const positions = [];
+  const seen = new Set();
+  const center = Math.floor((minStart + maxStart) * 0.5);
+  const maxOffset = Math.max(center - minStart, maxStart - center);
+  for (let offset = 0; offset <= maxOffset; offset += 1) {
+    const order = offset === 0
+      ? [0]
+      : preferPositiveFirst
+        ? [offset, -offset]
+        : [-offset, offset];
+    for (const delta of order) {
+      const value = center + delta;
+      if (value < minStart || value > maxStart) {
+        continue;
+      }
+      if (seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      positions.push(value);
+    }
+  }
+  return positions;
+}
+
+function buildBedCandidatesForWall({
+  wallSide,
+  interiorMinX,
+  interiorMaxX,
+  interiorMinY,
+  interiorMaxY,
+  preferPositiveFirst,
+}) {
+  const candidates = [];
+  if (wallSide === "N" || wallSide === "S") {
+    const minStartX = interiorMinX;
+    const maxStartX = interiorMaxX - 1;
+    const y = wallSide === "N" ? interiorMinY : interiorMaxY - 1;
+    for (const x of buildCenteredStartPositions(minStartX, maxStartX, preferPositiveFirst)) {
+      candidates.push({
+        x,
+        y,
+        orientation: wallSide === "N" ? "north" : "south",
+      });
+    }
+    return candidates;
+  }
+
+  const minStartY = interiorMinY;
+  const maxStartY = interiorMaxY - 1;
+  const x = wallSide === "W" ? interiorMinX : interiorMaxX - 1;
+  for (const y of buildCenteredStartPositions(minStartY, maxStartY, preferPositiveFirst)) {
+    candidates.push({
+      x,
+      y,
+      orientation: wallSide === "W" ? "west" : "east",
+    });
+  }
+  return candidates;
+}
+
+function emitRoomFurnitureDescriptors(tileMap, rooms, cx, cy) {
+  if (!(tileMap instanceof Uint8Array) || !Array.isArray(rooms) || rooms.length === 0) {
+    return {
+      schemaVersion: FURNITURE_DESCRIPTOR_SCHEMA_VERSION,
+      furnitureDescriptors: [],
+      furnitureByTypeCounts: {},
+    };
+  }
+
+  const furnitureDescriptors = [];
+
+  for (let roomIndex = 0; roomIndex < rooms.length; roomIndex += 1) {
+    const room = rooms[roomIndex];
+    const roomX = Math.floor(Number(room?.x));
+    const roomY = Math.floor(Number(room?.y));
+    const roomW = Math.floor(Number(room?.w));
+    const roomH = Math.floor(Number(room?.h));
+    if (
+      !Number.isFinite(roomX) ||
+      !Number.isFinite(roomY) ||
+      !Number.isFinite(roomW) ||
+      !Number.isFinite(roomH) ||
+      roomW <= 2 ||
+      roomH <= 2
+    ) {
+      continue;
+    }
+
+    const roomId = `room_${roomIndex}`;
+    const occupiedKeys = new Set();
+
+    function placeFromCandidates(slotId, typeId, candidates, chancePermille = 1000) {
+      const chance = Math.max(0, Math.min(1000, Math.floor(Number(chancePermille) || 0)));
+      const roll = seededIndex(
+        1000,
+        NEXTGEN_SEED,
+        cx,
+        cy,
+        "furniture-slot-roll",
+        roomId,
+        slotId
+      );
+      if (roll >= chance) {
+        return false;
+      }
+
+      const footprint = FURNITURE_FOOTPRINT_BY_TYPE[typeId];
+      if (!footprint) {
+        return false;
+      }
+
+      for (const candidate of candidates) {
+        const tileX = Math.floor(Number(candidate?.x));
+        const tileY = Math.floor(Number(candidate?.y));
+        const orientation = String(candidate?.orientation || "north");
+        if (
+          orientation !== "north" &&
+          orientation !== "east" &&
+          orientation !== "south" &&
+          orientation !== "west"
+        ) {
+          continue;
+        }
+        if (
+          !canPlaceFurnitureFootprint(
+            tileMap,
+            occupiedKeys,
+            tileX,
+            tileY,
+            footprint.widthTiles,
+            footprint.heightTiles
+          )
+        ) {
+          continue;
+        }
+
+        claimFurnitureFootprint(
+          occupiedKeys,
+          tileX,
+          tileY,
+          footprint.widthTiles,
+          footprint.heightTiles
+        );
+        furnitureDescriptors.push({
+          schemaVersion: FURNITURE_DESCRIPTOR_SCHEMA_VERSION,
+          typeId,
+          tileX,
+          tileY,
+          orientation,
+          roomId,
+          spawnSlotId: slotId,
+          chunkX: cx,
+          chunkY: cy,
+        });
+        return true;
+      }
+      return false;
+    }
+
+    const interiorMinX = roomX + 1;
+    const interiorMaxX = roomX + roomW - 2;
+    const interiorMinY = roomY + 1;
+    const interiorMaxY = roomY + roomH - 2;
+    if (interiorMinX > interiorMaxX || interiorMinY > interiorMaxY) {
+      continue;
+    }
+
+    const shortSides = shortSideDirections(room);
+    const shortSideDoorCounts = shortSides.map((side) => ({
+      side,
+      doorCount: countDoorTilesOnRoomWall(tileMap, room, side),
+    }));
+    const noDoorShortSides = shortSideDoorCounts
+      .filter((entry) => entry.doorCount === 0)
+      .map((entry) => entry.side);
+    const shortSidesByDoorCount = [...shortSideDoorCounts]
+      .sort((a, b) => a.doorCount - b.doorCount)
+      .map((entry) => entry.side);
+    const prioritizedBedWalls = noDoorShortSides.length > 0 ? noDoorShortSides : shortSidesByDoorCount;
+    const preferredWallIndex = seededIndex(
+      prioritizedBedWalls.length,
+      NEXTGEN_SEED,
+      cx,
+      cy,
+      "furniture-bed-wall",
+      roomId,
+      roomX,
+      roomY,
+      roomW,
+      roomH
+    );
+    const orderedBedWalls = prioritizedBedWalls.length > 1
+      ? [
+          ...prioritizedBedWalls.slice(preferredWallIndex),
+          ...prioritizedBedWalls.slice(0, preferredWallIndex),
+        ]
+      : prioritizedBedWalls;
+    const preferPositiveFirst =
+      seededIndex(
+        2,
+        NEXTGEN_SEED,
+        cx,
+        cy,
+        "furniture-bed-sweep",
+        roomId,
+        roomX,
+        roomY,
+        roomW,
+        roomH
+      ) === 1;
+    const bedCandidates = [];
+    for (const wallSide of orderedBedWalls) {
+      bedCandidates.push(
+        ...buildBedCandidatesForWall({
+          wallSide,
+          interiorMinX,
+          interiorMaxX,
+          interiorMinY,
+          interiorMaxY,
+          preferPositiveFirst,
+        })
+      );
+    }
+
+    placeFromCandidates(
+      "bed_main",
+      "bed",
+      bedCandidates,
+      1000
+    );
+
+    placeFromCandidates(
+      "nightstand_main",
+      "nightstand",
+      [
+        { x: interiorMinX, y: interiorMinY, orientation: "north" },
+        { x: interiorMaxX, y: interiorMinY, orientation: "north" },
+        { x: interiorMinX, y: interiorMaxY, orientation: "south" },
+        { x: interiorMaxX, y: interiorMaxY, orientation: "south" },
+      ],
+      1000
+    );
+
+    placeFromCandidates(
+      "closet_main",
+      "closet",
+      [
+        { x: interiorMinX, y: interiorMinY, orientation: "south" },
+        { x: interiorMaxX, y: interiorMinY, orientation: "south" },
+      ],
+      1000
+    );
+
+    placeFromCandidates(
+      "sink_main",
+      "sink",
+      [
+        { x: interiorMaxX, y: interiorMaxY, orientation: "west" },
+        { x: interiorMinX, y: interiorMaxY, orientation: "east" },
+      ],
+      350
+    );
+
+    placeFromCandidates(
+      "mini_bar_main",
+      "mini_bar",
+      [
+        { x: interiorMaxX, y: interiorMinY, orientation: "west" },
+        { x: interiorMinX, y: interiorMaxY, orientation: "east" },
+      ],
+      350
+    );
+
+    placeFromCandidates(
+      "table_main",
+      "table",
+      [
+        {
+          x: Math.max(interiorMinX, Math.floor((interiorMinX + interiorMaxX) * 0.5) - 1),
+          y: Math.floor((interiorMinY + interiorMaxY) * 0.5),
+          orientation: "east",
+        },
+        { x: interiorMinX, y: Math.floor((interiorMinY + interiorMaxY) * 0.5), orientation: "east" },
+      ],
+      roomW >= 6 && roomH >= 6 ? 750 : 0
+    );
+
+    placeFromCandidates(
+      "chair_main",
+      "chair",
+      [
+        { x: interiorMinX, y: Math.floor((interiorMinY + interiorMaxY) * 0.5), orientation: "east" },
+        { x: interiorMaxX, y: Math.floor((interiorMinY + interiorMaxY) * 0.5), orientation: "west" },
+      ],
+      roomW >= 6 && roomH >= 6 ? 700 : 0
+    );
+  }
+
+  return {
+    schemaVersion: FURNITURE_DESCRIPTOR_SCHEMA_VERSION,
+    furnitureDescriptors,
+    furnitureByTypeCounts: summarizeFurnitureDescriptorsByType(furnitureDescriptors),
+  };
+}
+
 function generateChunkRooms(baseTileMap, cx, cy) {
   const tileMap = baseTileMap.slice();
   const zones = deriveRoomFillSpaces(tileMap);
@@ -1989,13 +2401,13 @@ function generateChunkRooms(baseTileMap, cx, cy) {
     for (const side of shortSides) {
       shortCandidates.push(...doorBySide[side]);
     }
-    let doorCandidates = [];
-    if (room.preferredDoorSide && doorBySide[room.preferredDoorSide].length > 0) {
+    let doorCandidates = shortCandidates;
+    if (
+      room.preferredDoorSide &&
+      shortSides.includes(room.preferredDoorSide) &&
+      doorBySide[room.preferredDoorSide].length > 0
+    ) {
       doorCandidates = doorBySide[room.preferredDoorSide];
-    } else if (shortCandidates.length > 0) {
-      doorCandidates = shortCandidates;
-    } else {
-      doorCandidates = [...doorBySide.N, ...doorBySide.E, ...doorBySide.S, ...doorBySide.W];
     }
     if (!doorCandidates || doorCandidates.length === 0) {
       doorlessRooms += 1;
@@ -2044,6 +2456,7 @@ function generateChunkRooms(baseTileMap, cx, cy) {
     }
   }
   uncoveredPrefabArea = unfilledCount;
+  const furnitureEmission = emitRoomFurnitureDescriptors(tileMap, rooms, cx, cy);
 
   return {
     tileMap,
@@ -2061,6 +2474,10 @@ function generateChunkRooms(baseTileMap, cx, cy) {
     reservedResidueCount,
     validatorPassed,
     validatorReasonCodes,
+    furnitureDescriptorSchemaVersion: furnitureEmission.schemaVersion,
+    furnitureDescriptors: furnitureEmission.furnitureDescriptors,
+    furnitureDescriptorCount: furnitureEmission.furnitureDescriptors.length,
+    furnitureByTypeCounts: furnitureEmission.furnitureByTypeCounts,
   };
 }
 

@@ -22,6 +22,7 @@ import {
   hasConnectingNeighbor,
   placeChunkAccessCorridors,
 } from "../../engine/generation/chunkGenerator.js";
+import { createFurnitureCatalog } from "../phaser/furniture/furnitureCatalog.js";
 
 const NEXTGEN_CHUNKS_X = 6;
 const NEXTGEN_CHUNKS_Y = 6;
@@ -36,6 +37,7 @@ const CHUNK_PIXELS = CHUNK_SIZE * TILE_PIXELS;
 const CORRIDOR_TILE_PIXEL = 3;
 const ACCESS_CORRIDOR_TILE_PIXEL = 4;
 const ROOM_PREFAB_TILE_PIXEL = 8;
+const FURNITURE_PREVIEW_TILE_PIXEL = 8;
 const ROOM_THIN_WALL_RATIO = 0.2;
 
 const WORLD_PREVIEW_CHUNKS_X = 20;
@@ -54,6 +56,8 @@ const accessCorridorTileGrid = document.getElementById("access-corridor-tile-gri
 const accessCorridorTilesMeta = document.getElementById("access-corridor-tiles-meta");
 const roomPrefabGrid = document.getElementById("room-prefab-grid");
 const roomPrefabsMeta = document.getElementById("room-prefabs-meta");
+const furnitureCatalogGrid = document.getElementById("furniture-catalog-grid");
+const furnitureCatalogMeta = document.getElementById("furniture-catalog-meta");
 const openWorldPreviewButton = document.getElementById("open-world-preview");
 const closeWorldPreviewButton = document.getElementById("close-world-preview");
 const appMain = document.querySelector("main");
@@ -61,6 +65,7 @@ const worldPreviewScreen = document.getElementById("world-preview-screen");
 const worldPreviewCanvas = document.getElementById("world-preview-canvas");
 const worldPreviewCtx = worldPreviewCanvas ? worldPreviewCanvas.getContext("2d") : null;
 const worldPreviewMeta = document.getElementById("world-preview-meta");
+const furnitureCatalog = createFurnitureCatalog();
 
 nextgenCanvas.width = NEXTGEN_CHUNKS_X * CHUNK_PIXELS + (NEXTGEN_CHUNKS_X - 1) * CHUNK_GAP;
 nextgenCanvas.height = NEXTGEN_CHUNKS_Y * CHUNK_PIXELS + (NEXTGEN_CHUNKS_Y - 1) * CHUNK_GAP;
@@ -267,6 +272,80 @@ function drawCorridorChunk(nextCtx, originX, originY, chunkInput, tilePixel = TI
   }
 }
 
+function furnitureTypeColor(typeId) {
+  if (typeId === "bed") {
+    return "#5e8fcb";
+  }
+  if (typeId === "nightstand") {
+    return "#d49f64";
+  }
+  if (typeId === "closet") {
+    return "#8f6bd1";
+  }
+  if (typeId === "sink") {
+    return "#5cc4d6";
+  }
+  if (typeId === "mini_bar") {
+    return "#f08aa9";
+  }
+  if (typeId === "chair") {
+    return "#7ba95f";
+  }
+  if (typeId === "table") {
+    return "#be8b5f";
+  }
+  return "#666666";
+}
+
+function formatTypeCountMap(countMap) {
+  if (!countMap || typeof countMap !== "object") {
+    return "none";
+  }
+  const entries = Object.entries(countMap)
+    .filter(([, value]) => Number(value) > 0)
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) {
+    return "none";
+  }
+  return entries.map(([key, value]) => `${key}:${value}`).join(", ");
+}
+
+function drawFurnitureDescriptorsOverlay(nextCtx, originX, originY, chunkRooms, tilePixel = TILE_PIXELS) {
+  const furnitureDescriptors = Array.isArray(chunkRooms?.furnitureDescriptors)
+    ? chunkRooms.furnitureDescriptors
+    : [];
+  if (furnitureDescriptors.length === 0) {
+    return;
+  }
+
+  for (const descriptor of furnitureDescriptors) {
+    const typeId = String(descriptor?.typeId || "");
+    const def = furnitureCatalog[typeId];
+    if (!def || !def.footprint) {
+      continue;
+    }
+    const tileX = Math.floor(Number(descriptor?.tileX));
+    const tileY = Math.floor(Number(descriptor?.tileY));
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+      continue;
+    }
+    const w = Math.max(1, Number(def.footprint.widthTiles) || 1);
+    const h = Math.max(1, Number(def.footprint.heightTiles) || 1);
+    const leftPx = originX + tileX * tilePixel;
+    const topPx = originY + tileY * tilePixel;
+    const widthPx = w * tilePixel;
+    const heightPx = h * tilePixel;
+    const color = furnitureTypeColor(typeId);
+    nextCtx.fillStyle = color;
+    nextCtx.globalAlpha = 0.8;
+    nextCtx.fillRect(leftPx, topPx, widthPx, heightPx);
+    nextCtx.globalAlpha = 1;
+    nextCtx.strokeStyle = "#111111";
+    nextCtx.lineWidth = 1;
+    nextCtx.strokeRect(leftPx + 0.5, topPx + 0.5, widthPx - 1, heightPx - 1);
+  }
+}
+
 function formatReasonCountMap(reasonCounts) {
   const keys = Object.keys(reasonCounts).sort();
   if (keys.length === 0) {
@@ -437,6 +516,66 @@ function renderRoomPrefabCatalog(prefabs) {
   }
 }
 
+function drawFurnitureCatalogPreview(canvasEl, typeId, definition) {
+  const footprint = definition?.footprint || { widthTiles: 1, heightTiles: 1 };
+  const widthTiles = Math.max(1, Number(footprint.widthTiles) || 1);
+  const heightTiles = Math.max(1, Number(footprint.heightTiles) || 1);
+  const marginTiles = 1;
+  const canvasWidthTiles = widthTiles + marginTiles * 2;
+  const canvasHeightTiles = heightTiles + marginTiles * 2;
+
+  canvasEl.width = canvasWidthTiles * FURNITURE_PREVIEW_TILE_PIXEL;
+  canvasEl.height = canvasHeightTiles * FURNITURE_PREVIEW_TILE_PIXEL;
+  const previewCtx = canvasEl.getContext("2d");
+  previewCtx.fillStyle = "#ffffff";
+  previewCtx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+
+  const color = furnitureTypeColor(typeId);
+  const leftPx = marginTiles * FURNITURE_PREVIEW_TILE_PIXEL;
+  const topPx = marginTiles * FURNITURE_PREVIEW_TILE_PIXEL;
+  const widthPx = widthTiles * FURNITURE_PREVIEW_TILE_PIXEL;
+  const heightPx = heightTiles * FURNITURE_PREVIEW_TILE_PIXEL;
+  previewCtx.fillStyle = color;
+  previewCtx.fillRect(leftPx, topPx, widthPx, heightPx);
+  previewCtx.strokeStyle = "#111111";
+  previewCtx.lineWidth = 1;
+  previewCtx.strokeRect(leftPx + 0.5, topPx + 0.5, widthPx - 1, heightPx - 1);
+}
+
+function renderFurnitureCatalog(catalog) {
+  if (!furnitureCatalogGrid) {
+    return;
+  }
+  furnitureCatalogGrid.innerHTML = "";
+  const typeIds = Object.keys(catalog).sort();
+
+  for (const typeId of typeIds) {
+    const def = catalog[typeId];
+    const card = document.createElement("article");
+    card.className = "corridor-tile-card";
+
+    const title = document.createElement("h3");
+    title.className = "corridor-tile-title";
+    title.textContent = `${def.displayName} (${typeId})`;
+
+    const canvasEl = document.createElement("canvas");
+    canvasEl.className = "furniture-catalog-canvas";
+    canvasEl.setAttribute("aria-label", `Furniture ${def.displayName}, ${typeId}`);
+    drawFurnitureCatalogPreview(canvasEl, typeId, def);
+
+    const details = document.createElement("p");
+    details.className = "corridor-tile-sockets";
+    details.textContent = `Footprint: ${def.footprint.widthTiles}x${def.footprint.heightTiles} | Move: ${def.movementProfile} | Resource: ${def.resourceSource}`;
+
+    card.append(title, canvasEl, details);
+    furnitureCatalogGrid.appendChild(card);
+  }
+
+  if (furnitureCatalogMeta) {
+    furnitureCatalogMeta.textContent = `${typeIds.length} furniture types loaded from the runtime furniture catalog contract.`;
+  }
+}
+
 function drawNextGeneratorRandomized(patterns, accessCatalogue) {
   nextgenCtx.fillStyle = "#ffffff";
   nextgenCtx.fillRect(0, 0, nextgenCanvas.width, nextgenCanvas.height);
@@ -445,6 +584,7 @@ function drawNextGeneratorRandomized(patterns, accessCatalogue) {
   const passResult = enforceNextgenConnections(assignments, patterns, bounds);
   const assignmentLines = [];
   const chunkValidators = [];
+  let totalFurnitureDescriptors = 0;
 
   for (let cy = bounds.minY; cy <= bounds.maxY; cy += 1) {
     for (let cx = bounds.minX; cx <= bounds.maxX; cx += 1) {
@@ -459,6 +599,12 @@ function drawNextGeneratorRandomized(patterns, accessCatalogue) {
       const pixelY = gridY * (CHUNK_PIXELS + CHUNK_GAP);
 
       drawCorridorChunk(nextgenCtx, pixelX, pixelY, chunkRooms);
+      drawFurnitureDescriptorsOverlay(nextgenCtx, pixelX, pixelY, chunkRooms, TILE_PIXELS);
+      totalFurnitureDescriptors +=
+        Number(chunkRooms.furnitureDescriptorCount) ||
+        (Array.isArray(chunkRooms.furnitureDescriptors)
+          ? chunkRooms.furnitureDescriptors.length
+          : 0);
 
       nextgenCtx.fillStyle = "#bb0000";
       nextgenCtx.font = "12px Consolas, monospace";
@@ -498,8 +644,9 @@ function drawNextGeneratorRandomized(patterns, accessCatalogue) {
       chunkValidators.push(chunkValidator);
       const formalValidatorSummary = formatChunkValidatorSummary(chunkValidator);
       const roomsSummary = `rooms ${chunkRooms.roomZoneCount}, doors ${chunkRooms.doorCount}, doorless ${chunkRooms.doorlessRooms}, undersized ${chunkRooms.undersizedRooms}, unfilled ${chunkRooms.unfilledCount}, prefab-uncovered ${chunkRooms.uncoveredPrefabArea}, growth ${chunkRooms.growthAttempted}/${chunkRooms.growthUpgraded}/${chunkRooms.growthBlocked}, reserved-residue ${chunkRooms.reservedResidueCount}`;
+      const furnitureSummary = `furniture ${chunkRooms.furnitureDescriptorCount || 0}, by-type ${formatTypeCountMap(chunkRooms.furnitureByTypeCounts)}`;
       assignmentLines.push(
-        `Chunk (${cx},${cy}) -> tile ${assignment.tileId}, rotation ${assignment.rotationTurns * 90}deg, rerolls ${assignment.rerollIndex}, connected ${connected ? "yes" : "no"}, spaces ${spacesSummary}, specials ${specialsSummary}, access ${accessSummary}, rooms ${roomsSummary}, formal ${formalValidatorSummary}`
+        `Chunk (${cx},${cy}) -> tile ${assignment.tileId}, rotation ${assignment.rotationTurns * 90}deg, rerolls ${assignment.rerollIndex}, connected ${connected ? "yes" : "no"}, spaces ${spacesSummary}, specials ${specialsSummary}, access ${accessSummary}, rooms ${roomsSummary}, ${furnitureSummary}, formal ${formalValidatorSummary}`
       );
     }
   }
@@ -507,7 +654,7 @@ function drawNextGeneratorRandomized(patterns, accessCatalogue) {
   const validationSummary = aggregateChunkValidators(chunkValidators);
 
   if (nextgenMeta) {
-    nextgenMeta.textContent = `Status: seeded + connection pass | Seed: ${NEXTGEN_SEED} | Passes: ${passResult.passesRun} | Total rerolls: ${passResult.totalRerolls} | Validator: ${validationSummary.passing ? "PASS" : "FAIL"} (${validationSummary.failedCount}/${validationSummary.total} failed)`;
+    nextgenMeta.textContent = `Status: seeded + connection pass | Seed: ${NEXTGEN_SEED} | Passes: ${passResult.passesRun} | Total rerolls: ${passResult.totalRerolls} | Furniture descriptors: ${totalFurnitureDescriptors} | Validator: ${validationSummary.passing ? "PASS" : "FAIL"} (${validationSummary.failedCount}/${validationSummary.total} failed)`;
   }
   if (nextgenReport) {
     const legend = `Legend: ${SPECIAL_SPACE_DEFS.map((s) => `${s.label}=${s.color}`).join(" | ")}`;
@@ -556,6 +703,7 @@ function drawWorldPreview(patterns, accessCatalogue) {
   let totalGrowthUpgraded = 0;
   let totalGrowthBlocked = 0;
   let totalReservedResidue = 0;
+  let totalFurnitureDescriptors = 0;
   const chunkValidators = [];
 
   for (let cy = bounds.minY; cy <= bounds.maxY; cy += 1) {
@@ -578,6 +726,13 @@ function drawWorldPreview(patterns, accessCatalogue) {
         WORLD_PREVIEW_TILE_PIXELS,
         false
       );
+      drawFurnitureDescriptorsOverlay(
+        worldPreviewCtx,
+        pixelX,
+        pixelY,
+        chunkRooms,
+        WORLD_PREVIEW_TILE_PIXELS
+      );
 
       totalRooms += chunkRooms.roomZoneCount;
       totalDoors += chunkRooms.doorCount;
@@ -589,6 +744,11 @@ function drawWorldPreview(patterns, accessCatalogue) {
       totalGrowthUpgraded += chunkRooms.growthUpgraded;
       totalGrowthBlocked += chunkRooms.growthBlocked;
       totalReservedResidue += chunkRooms.reservedResidueCount;
+      totalFurnitureDescriptors +=
+        Number(chunkRooms.furnitureDescriptorCount) ||
+        (Array.isArray(chunkRooms.furnitureDescriptors)
+          ? chunkRooms.furnitureDescriptors.length
+          : 0);
     }
   }
 
@@ -596,7 +756,7 @@ function drawWorldPreview(patterns, accessCatalogue) {
   const validatorFailingList = formatFailingChunkList(validationSummary.failing, 10);
 
   if (worldPreviewMeta) {
-    worldPreviewMeta.textContent = `Seed: ${NEXTGEN_SEED} | Area: ${WORLD_PREVIEW_CHUNKS_X}x${WORLD_PREVIEW_CHUNKS_Y} chunks | Connection passes: ${passResult.passesRun} | Rerolls: ${passResult.totalRerolls} | Rooms: ${totalRooms} | Doors: ${totalDoors} | Doorless: ${totalDoorless} | Undersized: ${totalUndersized} | Unfilled: ${totalUnfilled} | Prefab-uncovered: ${totalPrefabUncovered} | Growth(A/U/B): ${totalGrowthAttempted}/${totalGrowthUpgraded}/${totalGrowthBlocked} | Reserved residue: ${totalReservedResidue} | Validator: ${validationSummary.passing ? "PASS" : "FAIL"} (${validationSummary.failedCount}/${validationSummary.total} failed) | Failure reasons: ${formatReasonCountMap(validationSummary.failureReasonCounts)} | Failing chunks: ${validatorFailingList}`;
+    worldPreviewMeta.textContent = `Seed: ${NEXTGEN_SEED} | Area: ${WORLD_PREVIEW_CHUNKS_X}x${WORLD_PREVIEW_CHUNKS_Y} chunks | Connection passes: ${passResult.passesRun} | Rerolls: ${passResult.totalRerolls} | Rooms: ${totalRooms} | Doors: ${totalDoors} | Doorless: ${totalDoorless} | Undersized: ${totalUndersized} | Unfilled: ${totalUnfilled} | Prefab-uncovered: ${totalPrefabUncovered} | Furniture descriptors: ${totalFurnitureDescriptors} | Growth(A/U/B): ${totalGrowthAttempted}/${totalGrowthUpgraded}/${totalGrowthBlocked} | Reserved residue: ${totalReservedResidue} | Validator: ${validationSummary.passing ? "PASS" : "FAIL"} (${validationSummary.failedCount}/${validationSummary.total} failed) | Failure reasons: ${formatReasonCountMap(validationSummary.failureReasonCounts)} | Failing chunks: ${validatorFailingList}`;
   }
 }
 
@@ -635,6 +795,7 @@ drawNextGeneratorRandomized(corridorPatterns, accessCorridorCatalogue);
 renderCorridorTileCatalog(corridorPatterns);
 renderAccessCorridorCatalog(accessCorridorCatalogue);
 renderRoomPrefabCatalog(ROOM_PREFAB_CATALOG);
+renderFurnitureCatalog(furnitureCatalog);
 
 if (openWorldPreviewButton) {
   openWorldPreviewButton.addEventListener("click", () => {

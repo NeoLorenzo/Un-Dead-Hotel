@@ -48,7 +48,7 @@ export const GUEST_DANGER_DISPATCH_STRATEGIES = Object.freeze([
 
 const DEFAULT_OBJECTIVE_PLANNING_POLICY = Object.freeze({
   enforceBrainObjectiveAuthority: true,
-  allowRoomDangerOverride: true,
+  allowRoomDangerOverride: false,
 });
 
 function normalizeObjectiveState(objectiveState) {
@@ -137,6 +137,7 @@ export function dispatchObjectivePlan({
     ? normalizedBrainObjectiveState
     : OBJECTIVE_WANDER;
   const shouldApplyRoomDangerOverride =
+    resolvedPolicy.enforceBrainObjectiveAuthority !== true &&
     resolvedPolicy.allowRoomDangerOverride &&
     effectiveBrainObjectiveState !== OBJECTIVE_DANGER &&
     roomDangerOverrideActive === true &&

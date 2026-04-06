@@ -8,6 +8,8 @@ This folder contains the source of truth for Un-Dead Hotel documentation.
   - Current shipped state only (no future roadmap content).
 - `GAME_ROADMAP.md`
   - Future roadmap only (no shipped-state reporting).
+- `Furniture System Expansion Documentation/FURNITURE_SYSTEM_EXPANSION_IMPLEMENTATION_PLAN.md`
+  - Active phase-by-phase implementation plan for roadmap Phase 1 (Furniture System Expansion).
 - `GAME_ARCHITECTURE.md`
   - Runtime architecture, module boundaries, and system responsibilities.
 - `PROCEDURAL_GENERATION.md`

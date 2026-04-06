@@ -1,5 +1,6 @@
 export function createRuntimeHud({
   element,
+  clockElement,
   seed,
   streamWidthChunks,
   streamHeightChunks,
@@ -17,21 +18,26 @@ export function createRuntimeHud({
     cameraChunk,
     viewportChunksDrawn,
     zoomTilePixels,
+    clockDisplay,
   }) {
-    if (!element) {
-      return;
+    if (element) {
+      const loadedWidth = loadedSpan(loadedBounds.minX, loadedBounds.maxX);
+      const loadedHeight = loadedSpan(loadedBounds.minY, loadedBounds.maxY);
+      const zoomLabel =
+        typeof zoomTilePixels === "number" ? zoomTilePixels.toFixed(2) : "n/a";
+
+      element.textContent =
+        `Seed: ${seed} | Loaded chunks: ${loadedChunkCount} | Active stream window: ${streamWidthChunks}x${streamHeightChunks} | ` +
+        `Loaded bounds: (${loadedBounds.minX},${loadedBounds.minY}) -> (${loadedBounds.maxX},${loadedBounds.maxY}) [${loadedWidth}x${loadedHeight}] | ` +
+        `Viewport chunks drawn: ${viewportChunksDrawn} | Camera chunk: (${cameraChunk.x},${cameraChunk.y}) | ` +
+        `Zoom(tile px): ${zoomLabel}`;
     }
 
-    const loadedWidth = loadedSpan(loadedBounds.minX, loadedBounds.maxX);
-    const loadedHeight = loadedSpan(loadedBounds.minY, loadedBounds.maxY);
-    const zoomLabel =
-      typeof zoomTilePixels === "number" ? zoomTilePixels.toFixed(2) : "n/a";
-
-    element.textContent =
-      `Seed: ${seed} | Loaded chunks: ${loadedChunkCount} | Active stream window: ${streamWidthChunks}x${streamHeightChunks} | ` +
-      `Loaded bounds: (${loadedBounds.minX},${loadedBounds.minY}) -> (${loadedBounds.maxX},${loadedBounds.maxY}) [${loadedWidth}x${loadedHeight}] | ` +
-      `Viewport chunks drawn: ${viewportChunksDrawn} | Camera chunk: (${cameraChunk.x},${cameraChunk.y}) | ` +
-      `Zoom(tile px): ${zoomLabel}`;
+    if (clockElement) {
+      const dayLabel = String(clockDisplay?.dayLabel || "Day ?");
+      const timeLabel = String(clockDisplay?.timeLabel || "00:00");
+      clockElement.textContent = `${dayLabel} ${timeLabel}`;
+    }
   }
 
   return {

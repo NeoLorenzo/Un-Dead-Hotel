@@ -12,12 +12,26 @@ function toInt(value) {
   return Math.round(Number(value));
 }
 
+function formatCountMap(countMap) {
+  if (!countMap || typeof countMap !== "object") {
+    return "none";
+  }
+  const entries = Object.entries(countMap)
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  if (entries.length === 0) {
+    return "none";
+  }
+  return entries.map(([key, count]) => `${key}:${toInt(count)}`).join(" | ");
+}
+
 export function createFirstContactDiagnosticsPanel({
   parentElement = null,
   humanManager = null,
   humanController = null,
   humanCommandController = null,
   zombieManager = null,
+  getFurnitureDebugState = null,
   getGameOverActive = null,
 } = {}) {
   if (!parentElement) {
@@ -498,6 +512,37 @@ export function createFirstContactDiagnosticsPanel({
           )}/${toInt(gridSummary.maxDynamicExpansionAttempts)}`
         );
       }
+    }
+
+    const furnitureDebug = debugSnapshot?.furniture ||
+      (typeof getFurnitureDebugState === "function"
+        ? getFurnitureDebugState()
+        : null);
+    if (furnitureDebug) {
+      lines.push(
+        `Furniture: objects ${toInt(furnitureDebug.recordCount)} | occupied tiles ${toInt(
+          furnitureDebug.occupiedTileCount
+        )}`
+      );
+      lines.push(`Furniture by type: ${formatCountMap(furnitureDebug.typeCounts)}`);
+      const sampleIds = Array.isArray(furnitureDebug.sampleFurnitureIds)
+        ? furnitureDebug.sampleFurnitureIds
+            .filter((id) => typeof id === "string" && id.length > 0)
+            .slice(0, 3)
+        : [];
+      if (sampleIds.length > 0) {
+        lines.push(`Furniture ID sample: ${sampleIds.join(" | ")}`);
+      }
+      const sampleTiles = Array.isArray(furnitureDebug.sampleOccupiedTiles)
+        ? furnitureDebug.sampleOccupiedTiles
+            .filter((entry) => typeof entry === "string" && entry.length > 0)
+            .slice(0, 3)
+        : [];
+      if (sampleTiles.length > 0) {
+        lines.push(`Furniture occupancy sample: ${sampleTiles.join(" | ")}`);
+      }
+    } else {
+      lines.push("Furniture: unavailable");
     }
 
     const gameOverActive =
