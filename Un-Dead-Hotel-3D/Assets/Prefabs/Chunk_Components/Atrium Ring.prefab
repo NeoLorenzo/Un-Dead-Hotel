@@ -1,0 +1,285 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &2902848246341207888
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3731303809560336196}
+  m_Layer: 0
+  m_Name: Atrium Ring
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3731303809560336196
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2902848246341207888}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 96, y: 0, z: 128}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 8809638547865446553}
+  - {fileID: 2595410234674374277}
+  - {fileID: 4482829087853777758}
+  - {fileID: 4892112916490192860}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1001 &266536697577804264
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 3731303809560336196}
+    m_Modifications:
+    - target: {fileID: 56150578945857601, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_Name
+      value: Atrium Wing 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 32
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 128
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+--- !u!4 &8809638547865446553 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+  m_PrefabInstance: {fileID: 266536697577804264}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1001 &4185168847292022445
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 3731303809560336196}
+    m_Modifications:
+    - target: {fileID: 56150578945857601, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_Name
+      value: Atrium Wing 1 (3)
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: -0.7071068
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0.7071068
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 270
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+--- !u!4 &4892112916490192860 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+  m_PrefabInstance: {fileID: 4185168847292022445}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1001 &5172040498515323439
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 3731303809560336196}
+    m_Modifications:
+    - target: {fileID: 56150578945857601, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_Name
+      value: Atrium Wing 1 (2)
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 128
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: -32
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 180
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+--- !u!4 &4482829087853777758 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+  m_PrefabInstance: {fileID: 5172040498515323439}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1001 &6770121870941183988
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 3731303809560336196}
+    m_Modifications:
+    - target: {fileID: 56150578945857601, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_Name
+      value: Atrium Wing 1 (1)
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 160
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 96
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 0.7071068
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0.7071068
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 90
+      objectReference: {fileID: 0}
+    - target: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+--- !u!4 &2595410234674374277 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 8786789108084160881, guid: 8fa0eeb5c1376d04782f75a59edee69d, type: 3}
+  m_PrefabInstance: {fileID: 6770121870941183988}
+  m_PrefabAsset: {fileID: 0}
