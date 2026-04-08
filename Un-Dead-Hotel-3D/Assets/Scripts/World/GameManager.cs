@@ -18,12 +18,20 @@ namespace UnDeadHotel.World
         public GameObject zombiePrefab;
         public int initialZombieCount = 10;
 
+        [Header("Guests")]
+        public GameObject guestPrefab;
+        public int initialGuestCount = 5;
+
         private GameObject playerInstance;
 
         private void Start()
         {
             SpawnPlayer();
             SpawnZombies(initialZombieCount);
+            SpawnGuests(initialGuestCount);
+
+            // Spawn Behavior Tree Debug UI
+            new GameObject("BehaviorTreeUI_Manager").AddComponent<UnDeadHotel.UI.BehaviorTreeUI>();
         }
 
         public void SpawnPlayer()
@@ -69,6 +77,19 @@ namespace UnDeadHotel.World
                 Instantiate(zombiePrefab, spawnPos, Quaternion.identity);
             }
             Debug.Log($"Spawned {count} zombies.");
+        }
+
+        public void SpawnGuests(int count)
+        {
+            if (guestPrefab == null) return;
+
+            for (int i = 0; i < count; i++)
+            {
+                // Try to spawn guests in rooms initially if possible, or anywhere safe
+                Vector3 spawnPos = GetRandomNavMeshPoint(true);
+                Instantiate(guestPrefab, spawnPos, Quaternion.identity);
+            }
+            Debug.Log($"Spawned {count} guests.");
         }
 
         private Vector3 GetRandomNavMeshPoint(bool checkSafeDist = false)

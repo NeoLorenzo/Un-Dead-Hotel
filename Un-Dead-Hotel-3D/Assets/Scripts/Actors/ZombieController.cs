@@ -13,7 +13,7 @@ namespace UnDeadHotel.Actors
         [Header("AI Config")]
         public AIState currentState = AIState.Wander;
         public float detectionRange = 12f;
-        public float viewAngle = 110f;
+        public float viewAngle = 200f;
         public float hearingRadius = 2.0f;
         public float damageAmount = 20f;
         public float attackCooldown = 1.0f;
@@ -58,6 +58,7 @@ namespace UnDeadHotel.Actors
 
         private void HandleWander()
         {
+            if (!agent.isOnNavMesh) return;
             if (!agent.pathPending && agent.remainingDistance < 0.5f && !isWandering)
             {
                 StartCoroutine(WanderRoutine());
@@ -69,14 +70,20 @@ namespace UnDeadHotel.Actors
             isWandering = true;
             yield return new WaitForSeconds(wanderWaitTime);
             
-            Vector3 randomPos = Random.insideUnitSphere * wanderRadius;
-            randomPos += transform.position;
-            
-            if (NavMesh.SamplePosition(randomPos, out NavMeshHit hit, wanderRadius, NavMesh.AllAreas))
+            Vector2 randomDir = Random.insideUnitCircle * wanderRadius;
+            Vector3 randomTarget = transform.position + new Vector3(randomDir.x, 0, randomDir.y);
+
+            NavMeshHit hit;
+            // Raycast along the Surface!
+            if (NavMesh.Raycast(transform.position, randomTarget, out hit, NavMesh.AllAreas))
             {
                 agent.SetDestination(hit.position);
             }
-            
+            else
+            {
+                agent.SetDestination(randomTarget);
+            }
+
             isWandering = false;
         }
 
@@ -149,9 +156,12 @@ namespace UnDeadHotel.Actors
                 // Persistence: Keep moving toward last known position for a few seconds
                 lostTargetTimer += Time.deltaTime;
                 agent.isStopped = false;
-                agent.SetDestination(lastKnownPosition);
+                
+                if (agent.isOnNavMesh) {
+                    agent.SetDestination(lastKnownPosition);
+                }
 
-                if (lostTargetTimer > chasePersistence || agent.remainingDistance < 0.5f)
+                if (lostTargetTimer > chasePersistence || (agent.isOnNavMesh && agent.remainingDistance < 0.5f))
                 {
                     targetHuman = null;
                     currentState = AIState.Wander;
@@ -192,7 +202,7 @@ namespace UnDeadHotel.Actors
 
             foreach (var coll in colls)
             {
-                if (coll.gameObject != gameObject && (coll.CompareTag("Zombie") || coll.GetComponent<ZombieController>()))
+                if (coll.gameObject != gameObject && coll.GetComponent<ZombieController>() != null)
                 {
                     Vector3 diff = transform.position - coll.transform.position;
                     separation += diff.normalized / (diff.magnitude + 0.1f);

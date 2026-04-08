@@ -57,6 +57,8 @@ namespace UnDeadHotel.Player
             currentVelocity = Vector3.zero;
         }
 
+        public Transform followTarget;
+
         private void Update()
         {
             keyboard = Keyboard.current;
@@ -73,32 +75,42 @@ namespace UnDeadHotel.Player
             float zoomFactor = cam.orthographicSize / maxZoom;
             float currentPanSpeed = panSpeed * zoomFactor;
 
+            bool manualInputDetected = false;
+
             // WASD / Arrow Keys
-            if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed)
-                targetPosition.z += currentPanSpeed * Time.deltaTime;
-            if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed)
-                targetPosition.z -= currentPanSpeed * Time.deltaTime;
-            if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed)
-                targetPosition.x += currentPanSpeed * Time.deltaTime;
-            if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed)
-                targetPosition.x -= currentPanSpeed * Time.deltaTime;
+            if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed) { targetPosition.z += currentPanSpeed * Time.deltaTime; manualInputDetected = true; }
+            if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed) { targetPosition.z -= currentPanSpeed * Time.deltaTime; manualInputDetected = true; }
+            if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed) { targetPosition.x += currentPanSpeed * Time.deltaTime; manualInputDetected = true; }
+            if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed) { targetPosition.x -= currentPanSpeed * Time.deltaTime; manualInputDetected = true; }
 
             // Edge Scrolling
-            if (enableEdgeScrolling && mouse != null)
+            if (enableEdgeScrolling && mouse != null && !manualInputDetected)
             {
                 Vector2 mPos = mouse.position.ReadValue();
                 // Check if mouse is within a reasonable range and not just at (0,0)
                 if (mPos.x > 0.1f && mPos.y > 0.1f && mPos.x < Screen.width - 0.1f && mPos.y < Screen.height - 0.1f)
                 {
-                    if (mPos.y >= Screen.height - panBorderThickness)
-                        targetPosition.z += currentPanSpeed * Time.deltaTime;
-                    if (mPos.y <= panBorderThickness)
-                        targetPosition.z -= currentPanSpeed * Time.deltaTime;
-                    if (mPos.x >= Screen.width - panBorderThickness)
-                        targetPosition.x += currentPanSpeed * Time.deltaTime;
-                    if (mPos.x <= panBorderThickness)
-                        targetPosition.x -= currentPanSpeed * Time.deltaTime;
+                    if (mPos.y >= Screen.height - panBorderThickness) { targetPosition.z += currentPanSpeed * Time.deltaTime; manualInputDetected = true; }
+                    if (mPos.y <= panBorderThickness) { targetPosition.z -= currentPanSpeed * Time.deltaTime; manualInputDetected = true; }
+                    if (mPos.x >= Screen.width - panBorderThickness) { targetPosition.x += currentPanSpeed * Time.deltaTime; manualInputDetected = true; }
+                    if (mPos.x <= panBorderThickness) { targetPosition.x -= currentPanSpeed * Time.deltaTime; manualInputDetected = true; }
                 }
+            }
+
+            // Middle Mouse Drag explicitly breaking follow
+            if (mouse != null && mouse.middleButton.isPressed)
+            {
+                manualInputDetected = true;
+            }
+
+            if (manualInputDetected)
+            {
+                followTarget = null;
+            }
+
+            if (followTarget != null)
+            {
+                targetPosition = new Vector3(followTarget.position.x, targetPosition.y, followTarget.position.z);
             }
 
             // Clamp target bounds
